@@ -1,2 +1,2 @@
-Fantasy map generator made by Kira
+Fantasy map generator made by ThatKiraFox
 heavily inspired by Azgaar's Fantasy map generator 
