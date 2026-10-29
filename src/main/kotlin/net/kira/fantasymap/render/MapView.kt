@@ -18,15 +18,9 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.input.key.Key
-import androidx.compose.ui.input.key.KeyEventType
-import androidx.compose.ui.input.key.isCtrlPressed
-import androidx.compose.ui.input.key.isMetaPressed
-import androidx.compose.ui.input.key.isShiftPressed
-import androidx.compose.ui.input.key.key
-import androidx.compose.ui.input.key.onPreviewKeyEvent
-import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.key.*
 import androidx.compose.ui.input.pointer.PointerEventType
+import androidx.compose.ui.input.pointer.isSecondaryPressed
 import androidx.compose.ui.input.pointer.onPointerEvent
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
@@ -35,26 +29,28 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 import net.kira.fantasymap.Camera
-import net.kira.fantasymap.generation.FinishResult
-import net.kira.fantasymap.generation.PendingEdit
-import net.kira.fantasymap.generation.VertexDrag
-import net.kira.fantasymap.generation.VertexEditor
-import net.kira.fantasymap.model.Cell
-import net.kira.fantasymap.model.CellIndex
-import net.kira.fantasymap.model.MapGrid
-import net.kira.fantasymap.model.Vertex
+import net.kira.fantasymap.generation.*
+import net.kira.fantasymap.model.*
 import kotlin.math.floor
 import kotlin.math.pow
 import kotlin.math.roundToInt
 import kotlin.math.sqrt
 
 private const val MAX_FALLBACK_STEPS = 9
-private const val HANDLE_PICK_RADIUS = 18f      // в пикселях экрана
+private const val MAIN_HANDLE_PICK_RADIUS = 16f      // в пикселях экрана
+private const val CURVE_HANDLE_PICK_RADIUS = 9f
+private const val CURVE_HANDLES_MIN_SCALE = 30f      // ближе этого масштаба показываем точки кривых
+private const val LINE_PICK_RADIUS = 6f
 
 private val invalidColor = Color(0xFFFF4444)
 private val neighborColor = Color(0xFF66CCFF)
 private val smallCellColor = Color(0xFFFFA500)
+private val curvePointColor = Color(0xFF7CFC9A)
 private val handleBorderColor = Color(0xFF1E2A3A)
+
+
+
+private class SegmentHit(val edge: Edge, val segment: Int, val x: Float, val y: Float)
 
 private class RenderStats {
     var drawnTiles = 0
@@ -63,7 +59,7 @@ private class RenderStats {
 
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
-fun MapView(grid: MapGrid, worldWidth: Float, worldHeight: Float) {
+fun MapView(grid: MapGrid, worldWidth: Float, worldHeight: Float, maxHeight: Int) {
     val camera = remember { Camera(centerX = 2000f, centerY = 1250f, scale = 0.2f) }
     val stats = remember { RenderStats() }
     val scope = rememberCoroutineScope()
@@ -71,7 +67,7 @@ fun MapView(grid: MapGrid, worldWidth: Float, worldHeight: Float) {
     val cellIndex = remember {
         CellIndex(grid.cells, worldWidth, worldHeight, bucketSize = sqrt(averageCellArea) * 2f)
     }
-    val tileCache = remember { TileCache(grid, cellIndex, scope, worldWidth, worldHeight) }
+    val tileCache = remember { TileCache(grid, cellIndex, scope, worldWidth, worldHeight, maxHeight) }
     val editor = remember { VertexEditor(grid, cellIndex, tileCache, averageCellArea) }
     val outlinePath = remember { Path() }
     val focusRequester = remember { FocusRequester() }
@@ -83,10 +79,11 @@ fun MapView(grid: MapGrid, worldWidth: Float, worldHeight: Float) {
     var shownWaiting by remember { mutableStateOf(0) }
     var editMode by remember { mutableStateOf(false) }
     var selectedCell by remember { mutableStateOf<Cell?>(null) }
-    var drag by remember { mutableStateOf<VertexDrag?>(null) }
+    var drag by remember { mutableStateOf<EditDrag?>(null) }
     var pending by remember { mutableStateOf<PendingEdit?>(null) }
     var pendingVersion by remember { mutableStateOf(0) }     // меняется после каждого решения, чтобы обновлялись тексты
     var ignoreDrag by remember { mutableStateOf(false) }     // после Esc игнорируем остаток жеста, пока не отпустят кнопку
+    var lastPress by remember { mutableStateOf(Offset.Zero) }  // где нажали кнопку: по этому месту выбираем точку
     var message by remember { mutableStateOf<String?>(null) }
 
     fun worldX(screenX: Float) = camera.screenToWorldX(screenX, canvasSize.width.toFloat())
@@ -120,17 +117,68 @@ fun MapView(grid: MapGrid, worldWidth: Float, worldHeight: Float) {
         focusRequester.requestFocus()
     }
 
-    // Угол выбранной клетки рядом с курсором или null, если рядом ничего нет.
-    fun findHandle(cell: Cell, screenX: Float, screenY: Float): Vertex? {
-        var best: Vertex? = null
-        var bestDistance = HANDLE_PICK_RADIUS
+    // Точка выбранной клетки рядом с курсором или null. Основные точки в приоритете, точки кривых только при приближении.
+    fun findHandle(cell: Cell, screenX: Float, screenY: Float): Handle? {
+        val width = canvasSize.width.toFloat()
+        val height = canvasSize.height.toFloat()
+
+        var bestVertex: Vertex? = null
+        var bestDistance = MAIN_HANDLE_PICK_RADIUS
         for (corner in cell.corners()) {
-            val dx = camera.worldToScreenX(corner.x, canvasSize.width.toFloat()) - screenX
-            val dy = camera.worldToScreenY(corner.y, canvasSize.height.toFloat()) - screenY
+            val dx = camera.worldToScreenX(corner.x, width) - screenX
+            val dy = camera.worldToScreenY(corner.y, height) - screenY
             val distance = sqrt(dx * dx + dy * dy)
             if (distance <= bestDistance) {
-                best = corner
+                bestVertex = corner
                 bestDistance = distance
+            }
+        }
+        if (bestVertex != null) return Handle.MainPoint(bestVertex)
+
+        if (camera.scale < CURVE_HANDLES_MIN_SCALE) return null
+        var bestEdge: Edge? = null
+        var bestIndex = -1
+        bestDistance = CURVE_HANDLE_PICK_RADIUS
+        for (edge in cell.edges) {
+            val points = edge.points
+            for (i in 0 until points.size / 2) {
+                val dx = camera.worldToScreenX(points[2 * i], width) - screenX
+                val dy = camera.worldToScreenY(points[2 * i + 1], height) - screenY
+                val distance = sqrt(dx * dx + dy * dy)
+                if (distance <= bestDistance) {
+                    bestEdge = edge
+                    bestIndex = i
+                    bestDistance = distance
+                }
+            }
+        }
+        return bestEdge?.let { Handle.CurvePoint(it, bestIndex) }
+    }
+
+    fun findSegment(cell: Cell, screenX: Float, screenY: Float): SegmentHit? {
+        val width = canvasSize.width.toFloat()
+        val height = canvasSize.height.toFloat()
+        var best: SegmentHit? = null
+        var bestDistance = LINE_PICK_RADIUS
+        for (edge in cell.edges) {
+            var index = 0
+            edge.forEachSegment { ax, ay, bx, by ->
+                val sax = camera.worldToScreenX(ax, width)
+                val say = camera.worldToScreenY(ay, height)
+                val dx = camera.worldToScreenX(bx, width) - sax
+                val dy = camera.worldToScreenY(by, height) - say
+                val lengthSquared = dx * dx + dy * dy
+                if (lengthSquared > 0f) {
+                    val t = (((screenX - sax) * dx + (screenY - say) * dy) / lengthSquared).coerceIn(0f, 1f)
+                    val px = sax + t * dx
+                    val py = say + t * dy
+                    val distance = sqrt((screenX - px) * (screenX - px) + (screenY - py) * (screenY - py))
+                    if (distance <= bestDistance) {
+                        best = SegmentHit(edge, index, worldX(px), worldY(py))
+                        bestDistance = distance
+                    }
+                }
+                index++
             }
         }
         return best
@@ -159,6 +207,7 @@ fun MapView(grid: MapGrid, worldWidth: Float, worldHeight: Float) {
     }
 
     LaunchedEffect(Unit) {
+        // ждём, пока нарисуются плитки, видимые на старте, и только потом заказываем нижние уровни
         while (stats.drawnTiles == 0 || stats.waitingTiles > 0) delay(100)
         tileCache.prerenderLowLevels()
     }
@@ -218,9 +267,9 @@ fun MapView(grid: MapGrid, worldWidth: Float, worldHeight: Float) {
                             ignoreDrag = false
                             val cell = selectedCell
                             if (editMode && cell != null && pending == null) {
-                                val vertex = findHandle(cell, start.x, start.y)
-                                if (vertex != null) {
-                                    drag = editor.begin(vertex, worldX(start.x), worldY(start.y))
+                                val handle = findHandle(cell, lastPress.x, lastPress.y) ?: findHandle(cell, start.x, start.y)
+                                if (handle != null) {
+                                    drag = editor.begin(handle, worldX(start.x), worldY(start.y))
                                     message = null
                                 }
                             }
@@ -263,7 +312,7 @@ fun MapView(grid: MapGrid, worldWidth: Float, worldHeight: Float) {
                     )
                 }
                 .pointerInput(Unit) {
-                    detectTapGestures { tap ->
+                    detectTapGestures(onPress = { offset -> lastPress = offset }) { tap ->
                         if (!editMode) return@detectTapGestures
                         val tapped = cellIndex.findCell(worldX(tap.x), worldY(tap.y))
                         val currentPending = pending
@@ -280,6 +329,17 @@ fun MapView(grid: MapGrid, worldWidth: Float, worldHeight: Float) {
                             }
                             return@detectTapGestures
                         }
+
+                        val selected = selectedCell
+                        if (selected != null && camera.scale >= CURVE_HANDLES_MIN_SCALE && findHandle(selected, tap.x, tap.y) == null) {
+                            val hit = findSegment(selected, tap.x, tap.y)
+                            if (hit != null) {
+                                editor.addCurvePoint(hit.edge, hit.segment, hit.x, hit.y)
+                                message = null
+                                return@detectTapGestures
+                            }
+                        }
+
                         selectedCell = tapped                       // клик мимо клеток снимает выбор
                         message = null
                     }
@@ -288,6 +348,16 @@ fun MapView(grid: MapGrid, worldWidth: Float, worldHeight: Float) {
                     val change = event.changes.first()
                     val factor = 1.1f.pow(-change.scrollDelta.y)
                     camera.zoomAt(change.position.x, change.position.y, canvasSize.width.toFloat(), canvasSize.height.toFloat(), factor)
+                }
+                .onPointerEvent(PointerEventType.Press) { event ->
+                    if (!event.buttons.isSecondaryPressed || !editMode || drag != null || pending != null) return@onPointerEvent
+                    val cell = selectedCell ?: return@onPointerEvent
+                    val position = event.changes.first().position
+                    when (val handle = findHandle(cell, position.x, position.y)) {
+                        is Handle.CurvePoint -> message = editor.removeCurvePoint(handle.edge, handle.index)
+                        is Handle.MainPoint -> message = "Нельзя удалять основные точки клетки"
+                        null -> Unit
+                    }
                 }
         ) {
             frameTick                                            // подписка на перерисовку каждый кадр
@@ -303,9 +373,11 @@ fun MapView(grid: MapGrid, worldWidth: Float, worldHeight: Float) {
             val maxY = camera.centerY + halfHeightWorld
 
             val firstColumn = floor(minX / tileWorldSize).toInt().coerceAtLeast(0)
-            val lastColumn = floor(maxX / tileWorldSize).toInt().coerceAtMost(floor(worldWidth / tileWorldSize).toInt())
+            val lastColumn = floor(maxX / tileWorldSize)
+                .toInt().coerceAtMost(floor(worldWidth / tileWorldSize).toInt())
             val firstRow = floor(minY / tileWorldSize).toInt().coerceAtLeast(0)
-            val lastRow = floor(maxY / tileWorldSize).toInt().coerceAtMost(floor(worldHeight / tileWorldSize).toInt())
+            val lastRow = floor(maxY / tileWorldSize)
+                .toInt().coerceAtMost(floor(worldHeight / tileWorldSize).toInt())
 
             var drawn = 0
             var waiting = 0
@@ -358,7 +430,7 @@ fun MapView(grid: MapGrid, worldWidth: Float, worldHeight: Float) {
                 currentPending.smallCell?.let { drawOutline(it, camera, outlinePath, smallCellColor, Color(0x66FFA500)) }
             }
             if (selected != null && currentPending == null) {
-                drawHandles(selected, camera, currentDrag?.vertex, currentDrag?.isValid ?: true)
+                drawHandles(selected, camera, currentDrag, showCurvePoints = camera.scale >= CURVE_HANDLES_MIN_SCALE)
             }
         }
 
@@ -381,14 +453,16 @@ fun MapView(grid: MapGrid, worldWidth: Float, worldHeight: Float) {
                 val currentDrag = drag
                 val currentPending = pending
                 val cell = selectedCell
+                val zoomedIn = camera.scale >= CURVE_HANDLES_MIN_SCALE
                 val hint = when {
                     currentPending != null -> pendingHint(currentPending, averageCellArea)
                     currentDrag != null && !currentDrag.isValid ->
                         "Здесь нельзя: ${currentDrag.problem}. Отпустите, чтобы отменить."
                     currentDrag != null -> "Отпустите, чтобы применить. Esc — отмена."
                     cell == null -> "Кликните по клетке, чтобы выбрать её"
-                    else -> "Клетка №${cell.id}, высота ${cell.height}. Потяните белую точку, чтобы переместить вершину " +
-                            "(она общая с соседними клетками)."
+                    else -> "Клетка №${cell.id}, высота ${cell.height}, температура ${cell.temperature}, влажность ${cell.moisture}. Белые точки основные (общие с соседними клетками), " +
+                            (if (zoomedIn) "зелёные точки кривой границы. " else "чтобы увидеть точки кривых, приблизьте карту. ") +
+                            "Потяните точку, чтобы переместить её."
                 }
                 Text(hint, color = Color.White, modifier = Modifier.background(Color(0x99000000)).padding(4.dp))
                 if (currentPending != null) {
@@ -447,31 +521,47 @@ private fun DrawScope.drawOutline(cell: Cell, camera: Camera, path: Path, stroke
     drawPath(path, strokeColor, style = Stroke(width = 2f))
 }
 
-// Точки на углах выбранной клетки; перетаскиваемая окрашена в жёлтый, а при недопустимом положении в красный.
-private fun DrawScope.drawHandles(cell: Cell, camera: Camera, activeVertex: Vertex?, isValid: Boolean) {
+// Точки выбранной клетки: основные белые, точки кривых мелкие зелёные (только при приближении).
+// Перетаскиваемая точка рисуется поверх остальных: жёлтая, а при недопустимом положении красная.
+private fun DrawScope.drawHandles(cell: Cell, camera: Camera, active: EditDrag?, showCurvePoints: Boolean) {
+    if (showCurvePoints) {
+        for (edge in cell.edges) {
+            val points = edge.points
+            for (i in 0 until points.size / 2) {
+                val center = Offset(
+                    camera.worldToScreenX(points[2 * i], size.width),
+                    camera.worldToScreenY(points[2 * i + 1], size.height)
+                )
+                drawCircle(handleBorderColor, radius = 4.5f, center = center)
+                drawCircle(curvePointColor, radius = 3f, center = center)
+            }
+        }
+    }
     for (corner in cell.corners()) {
         val center = Offset(camera.worldToScreenX(corner.x, size.width), camera.worldToScreenY(corner.y, size.height))
-        val color = when {
-            corner !== activeVertex -> Color.White
-            isValid -> Color(0xFFFFDD44)
-            else -> invalidColor
-        }
         drawCircle(handleBorderColor, radius = 7f, center = center)
-        drawCircle(color, radius = 5f, center = center)
+        drawCircle(Color.White, radius = 5f, center = center)
+    }
+    if (active != null) {
+        val center = Offset(camera.worldToScreenX(active.currentX, size.width), camera.worldToScreenY(active.currentY, size.height))
+        val radius = if (active.isMainPoint) 5f else 3f
+        drawCircle(handleBorderColor, radius = radius + 2f, center = center)
+        drawCircle(if (active.isValid) Color(0xFFFFDD44) else invalidColor, radius = radius, center = center)
     }
 }
 
 // Пока нужной плитки нет, показываем нужный кусок готовой плитки грубее уровнем.
 private fun DrawScope.drawFallbackTile(cache: TileCache, key: TileKey, destinationOffset: IntOffset, destinationSize: IntSize) {
     for (steps in 1..MAX_FALLBACK_STEPS) {
-        if (key.level - steps < 0) return
+        if (key.level - steps == 0) return
         val parentKey = TileKey(key.level - steps, key.column shr steps, key.row shr steps)
         val parentImage = cache.peek(parentKey) ?: continue
         val partSize = TILE_SIZE shr steps                       // сторона нужного куска в пикселях родителя
         val mask = (1 shl steps) - 1
         val sourceX = (key.column and mask) * partSize
         val sourceY = (mask - (key.row and mask)) * partSize     // верх картинки это бо́льшие Y мира
-        drawImage(parentImage, IntOffset(sourceX, sourceY), IntSize(partSize, partSize), destinationOffset, destinationSize)
+        drawImage(parentImage, IntOffset(sourceX, sourceY),
+            IntSize(partSize, partSize), destinationOffset, destinationSize)
         return
     }
 }

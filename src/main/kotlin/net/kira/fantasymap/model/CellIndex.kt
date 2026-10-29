@@ -3,8 +3,6 @@ package net.kira.fantasymap.model
 import kotlin.math.ceil
 import kotlin.math.floor
 
-// Поиск клеток по точке и по области: мир поделён на ровные корзины, в каждой список клеток, чьи габариты её задевают.
-// Методы синхронизированы: плитки рисуются в фоновых потоках, а правки идут из основного.
 class CellIndex(
     cells: List<Cell>,
     private val worldWidth: Float,

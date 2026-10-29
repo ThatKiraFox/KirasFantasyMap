@@ -7,7 +7,7 @@ import net.kira.fantasymap.model.MapGrid
 import kotlin.math.sqrt
 import kotlin.random.Random
 
-private const val ITERATIONS = 4         // 3 деления дают 8 отрезков и 7 промежуточных точек на ребро
+private const val ITERATIONS = 4
 private const val DISPLACEMENT = 0.2f        // насколько середина может сместиться вбок, в долях длины отрезка
 private const val FIX_PASSES = 3             // сколько раз пробуем уменьшить смещение у испорченных клеток
 private val validators = ThreadLocal.withInitial { CellValidator() }

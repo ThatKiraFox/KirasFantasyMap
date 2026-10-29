@@ -13,7 +13,12 @@ class Cell(val id: Int) {
         private set
     var maxY = 0f
         private set
+    var latitude = 0f
+        private set
+
     var height: Int = -1
+    var temperature: Float = -1f
+    var moisture: Float = 1f
 
     var isRemoved = false
 
@@ -113,5 +118,15 @@ class Cell(val id: Int) {
         }
         if (hasPrevious) sum += previousX.toDouble() * firstY - firstX.toDouble() * previousY
         return (abs(sum) / 2.0).toFloat()
+    }
+
+    fun getCenter(): Pair<Float, Float> {
+        val centerX = (maxX + minX) / 2f
+        val centerY = (maxY + minY) / 2f
+        return Pair(centerX, centerY)
+    }
+
+    fun updateLatitude(value: Float) {
+        latitude = value
     }
 }

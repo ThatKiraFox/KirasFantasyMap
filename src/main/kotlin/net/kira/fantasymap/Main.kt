@@ -8,7 +8,7 @@ import net.kira.fantasymap.generation.generateMap
 fun main() {
     val start = System.currentTimeMillis()
     val before = usedMemoryMb()
-    val grid = generateMap(4000f, 2500f, 300_000, seed = 1)
+    val grid = generateMap(4000f, 2500f, 300_000, seed = 1, 8500, 0.5f)
     val after = usedMemoryMb()
     println("cells=${grid.cells.size}, edges=${grid.edges.size}, vertices=${grid.vertices.size}, ${System.currentTimeMillis() - start} ms")
     println("grid takes about ${after - before} MB")
@@ -17,7 +17,7 @@ fun main() {
             onCloseRequest = { exitApplication() } ,
             title = "FantasyMap App",
         ) {
-            MapView(grid, 4000f, 2500f)
+            MapView(grid, 4000f, 2500f, maxHeight = 8500)
         }
     }
 }

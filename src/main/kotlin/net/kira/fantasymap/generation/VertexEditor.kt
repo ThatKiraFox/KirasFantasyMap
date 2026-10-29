@@ -6,25 +6,118 @@ import net.kira.fantasymap.model.Edge
 import net.kira.fantasymap.model.MapGrid
 import net.kira.fantasymap.model.Vertex
 import net.kira.fantasymap.render.TileCache
+import kotlin.collections.get
 
-private const val MIN_CELL_AREA_FACTOR = 0.2f    // клетка слишком маленькая, если меньше этой доли средней
+private const val MIN_CELL_AREA_FACTOR = 0.8f    // клетка слишком маленькая, если меньше этой доли средней
 private const val MAX_HISTORY = 200
+
+// За что тянут: основная точка клетки или точка кривой границы.
+sealed class Handle {
+    class MainPoint(val vertex: Vertex) : Handle()
+    class CurvePoint(val edge: Edge, val index: Int) : Handle()
+}
+
+// Перетаскивание. Общая часть для основных точек и точек кривых.
+abstract class EditDrag(val cells: List<Cell>, val areasBefore: Map<Cell, Float>) {
+    var problem: String? = null    // почему текущее положение недопустимо
+    val isValid: Boolean get() = problem == null
+
+    abstract val isMainPoint: Boolean
+    abstract val movedEdges: List<Edge>        // рёбра, форма которых меняется
+    abstract val ignoredVertex: Vertex?        // рёбра, выходящие из неё, при проверке чужих границ пропускаем
+    abstract val currentX: Float
+    abstract val currentY: Float
+    abstract val isMoved: Boolean
+
+    abstract fun moveTo(pointerX: Float, pointerY: Float)
+    abstract fun restoreStart()                // вернуть точку туда, где она была до правки
+    abstract fun restoreEnd()                  // поставить туда, где она оказалась после правки (для повтора)
+    abstract fun rememberEnd()
+}
 
 class VertexDrag(
     val vertex: Vertex,
-    val startX: Float,
-    val startY: Float,
-    val grabOffsetX: Float,        // на сколько вершина сдвинута относительно курсора в момент захвата
-    val grabOffsetY: Float,
-    val cells: List<Cell>,         // клетки, которым принадлежит вершина
-    val areasBefore: Map<Cell, Float>
-) {
-    var problem: String? = null    // почему текущее положение недопустимо
-    val isValid: Boolean get() = problem == null
+    private val grabOffsetX: Float,            // на сколько вершина сдвинута относительно курсора в момент захвата
+    private val grabOffsetY: Float,
+    cells: List<Cell>,
+    areasBefore: Map<Cell, Float>
+) : EditDrag(cells, areasBefore) {
+    private val startX = vertex.x
+    private val startY = vertex.y
+    private var endX = startX
+    private var endY = startY
+
+    override val isMainPoint: Boolean = true
+    override val movedEdges: List<Edge> get() = vertex.edges
+    override val ignoredVertex: Vertex? get() = vertex
+    override val currentX: Float get() = vertex.x
+    override val currentY: Float get() = vertex.y
+    override val isMoved: Boolean get() = vertex.x != startX || vertex.y != startY
+
+    override fun moveTo(pointerX: Float, pointerY: Float) {
+        vertex.x = pointerX + grabOffsetX
+        vertex.y = pointerY + grabOffsetY
+    }
+
+    override fun restoreStart() {
+        vertex.x = startX
+        vertex.y = startY
+    }
+
+    override fun restoreEnd() {
+        vertex.x = endX
+        vertex.y = endY
+    }
+
+    override fun rememberEnd() {
+        endX = vertex.x
+        endY = vertex.y
+    }
+}
+
+class CurvePointDrag(
+    val edge: Edge,
+    private val pointIndex: Int,
+    private val grabOffsetX: Float,
+    private val grabOffsetY: Float,
+    cells: List<Cell>,
+    areasBefore: Map<Cell, Float>
+) : EditDrag(cells, areasBefore) {
+    private val startX = edge.points[2 * pointIndex]
+    private val startY = edge.points[2 * pointIndex + 1]
+    private var endX = startX
+    private var endY = startY
+
+    override val isMainPoint: Boolean = false
+    override val movedEdges: List<Edge> get() = listOf(edge)
+    override val ignoredVertex: Vertex? get() = null
+    override val currentX: Float get() = edge.points[2 * pointIndex]
+    override val currentY: Float get() = edge.points[2 * pointIndex + 1]
+    override val isMoved: Boolean get() = currentX != startX || currentY != startY
+
+    override fun moveTo(pointerX: Float, pointerY: Float) {
+        edge.points[2 * pointIndex] = pointerX + grabOffsetX
+        edge.points[2 * pointIndex + 1] = pointerY + grabOffsetY
+    }
+
+    override fun restoreStart() {
+        edge.points[2 * pointIndex] = startX
+        edge.points[2 * pointIndex + 1] = startY
+    }
+
+    override fun restoreEnd() {
+        edge.points[2 * pointIndex] = endX
+        edge.points[2 * pointIndex + 1] = endY
+    }
+
+    override fun rememberEnd() {
+        endX = currentX
+        endY = currentY
+    }
 }
 
 // Правка применена, но надо решить, что делать с маленькими клетками.
-class PendingEdit(val drag: VertexDrag) {
+class PendingEdit(val drag: EditDrag) {
     val merges = ArrayList<MergeCells>()
     val accepted = HashSet<Cell>()                       // клетки, которые пользователь решил оставить
     var smallCell: Cell? = null                          // клетка, по которой сейчас ждём решение
@@ -37,69 +130,67 @@ sealed class FinishResult {
     class NeedsDecision(val pending: PendingEdit) : FinishResult()
 }
 
-// Одна правка в истории: сдвиг вершины и объединения, которые за ним последовали.
-private class EditRecord(val drag: VertexDrag, val endX: Float, val endY: Float, val merges: List<MergeCells>)
+// Одна правка в истории: сдвиг точки и объединения, которые за ним последовали.
+private sealed class HistoryItem
+private class EditRecord(val drag: EditDrag, val merges: List<MergeCells>) : HistoryItem()
+private class PointEdit(val edge: Edge, val index: Int, val x: Float, val y: Float, val added: Boolean) : HistoryItem()
 
-class VertexEditor {
-    private val grid: MapGrid
-    private val cellIndex: CellIndex
-    private val tileCache: TileCache
+class VertexEditor(
+    private val grid: MapGrid,
+    private val cellIndex: CellIndex,
+    private val tileCache: TileCache,
+    averageCellArea: Float
+) {
+    private val validator = CellValidator()
+    private val minCellArea = averageCellArea * MIN_CELL_AREA_FACTOR
+    private val undoStack = ArrayList<HistoryItem>()
+    private val redoStack = ArrayList<HistoryItem>()
 
-    constructor(grid: MapGrid, cellIndex: CellIndex, tileCache: TileCache, averageCellArea: Float) {
-        this.grid = grid
-        this.cellIndex = cellIndex
-        this.tileCache = tileCache
-        this.validator = CellValidator()
-        this.minCellArea = averageCellArea * MIN_CELL_AREA_FACTOR
-        this.undoStack = ArrayList<EditRecord>()
-        this.redoStack = ArrayList<EditRecord>()
-    }
+    fun begin(handle: Handle, pointerX: Float, pointerY: Float): EditDrag =
+        when (handle) {
+            is Handle.MainPoint -> {
+                val vertex = handle.vertex
+                val cells = vertex.edges.flatMap { it.cells }.distinct()
+                VertexDrag(vertex, vertex.x - pointerX, vertex.y - pointerY, cells, areasOf(cells))
+            }
+            is Handle.CurvePoint -> {
+                val edge = handle.edge
+                val cells = edge.cells
+                val x = edge.points[2 * handle.index]
+                val y = edge.points[2 * handle.index + 1]
+                CurvePointDrag(edge, handle.index, x - pointerX, y - pointerY, cells, areasOf(cells))
+            }
+        }
 
-    private val validator: CellValidator
-    private val minCellArea: Float
-    private val undoStack: ArrayList<EditRecord>
-    private val redoStack: ArrayList<EditRecord>
-
-    fun begin(vertex: Vertex, pointerX: Float, pointerY: Float): VertexDrag {
-        val cellSet = LinkedHashSet<Cell>()
-        for (edge in vertex.edges) cellSet.addAll(edge.cells)
-        val cells = cellSet.toList()
-        return VertexDrag(
-            vertex, vertex.x, vertex.y, vertex.x - pointerX, vertex.y - pointerY, cells,
-            areasBefore = cells.associateWith { it.area() }
-        )
-    }
-
-    // Двигает вершину и проверяет результат. Плитки при этом не трогаем, предпросмотр рисуется поверх них.
-    fun move(drag: VertexDrag, pointerX: Float, pointerY: Float) {
-        drag.vertex.x = pointerX + drag.grabOffsetX
-        drag.vertex.y = pointerY + drag.grabOffsetY
+    // Двигает точку и проверяет результат. Плитки при этом не трогаем, предпросмотр рисуется поверх них.
+    fun move(drag: EditDrag, pointerX: Float, pointerY: Float) {
+        drag.moveTo(pointerX, pointerY)
         val broken = drag.cells.firstOrNull { validator.selfIntersects(it) }
         drag.problem = when {
             broken != null -> "клетка №${broken.id} пересечёт сама себя"
-            crossesOtherEdges(drag) -> "границы пересекут границы соседних клеток"
+            crossesOtherEdges(drag.movedEdges, drag.ignoredVertex) -> "границы пересекут границы соседних клеток"
             else -> null
         }
     }
 
-    fun finish(drag: VertexDrag): FinishResult {
+    fun finish(drag: EditDrag): FinishResult {
         val problem = drag.problem
         if (problem != null) {
             cancel(drag)
-            return FinishResult.Rejected("Нельзя переместить вершину сюда: $problem. Правка отменена.")
+            return FinishResult.Rejected("Нельзя переместить точку сюда: $problem. Правка отменена.")
         }
-        if (drag.vertex.x == drag.startX && drag.vertex.y == drag.startY) return FinishResult.Applied   // не сдвинули, записывать нечего
-        refresh(drag)
+        if (!drag.isMoved) return FinishResult.Applied    // не сдвинули, записывать нечего
+        drag.rememberEnd()
+        refresh(drag.cells)
         val pending = PendingEdit(drag)
         if (advance(pending)) return FinishResult.NeedsDecision(pending)
-        record(drag, emptyList())
+        record(EditRecord(drag, emptyList()))
         return FinishResult.Applied
     }
 
-    fun cancel(drag: VertexDrag) {
-        drag.vertex.x = drag.startX
-        drag.vertex.y = drag.startY
-        refresh(drag)
+    fun cancel(drag: EditDrag) {
+        drag.restoreStart()
+        refresh(drag.cells)
     }
 
     // Объединяет маленькую клетку с выбранным соседом. Возвращает true, если нужно решение по следующей клетке.
@@ -116,7 +207,7 @@ class VertexEditor {
         return resolveNext(pending)
     }
 
-    // Отменяет всю правку, ещё не попавшую в историю: сначала объединения, потом сам сдвиг вершины.
+    // Отменяет всю правку, ещё не попавшую в историю: сначала объединения, потом сам сдвиг.
     fun abort(pending: PendingEdit) {
         for (merge in pending.merges.asReversed()) revertMerge(merge)
         pending.merges.clear()
@@ -125,36 +216,50 @@ class VertexEditor {
 
     // Отменяет последнюю правку из истории. false: отменять нечего.
     fun undo(): Boolean {
-        val record = undoStack.removeLastOrNull() ?: return false
-        for (merge in record.merges.asReversed()) revertMerge(merge)
-        record.drag.vertex.x = record.drag.startX
-        record.drag.vertex.y = record.drag.startY
-        refresh(record.drag)
-        redoStack.add(record)
+        val item = undoStack.removeLastOrNull() ?: return false
+        when (item) {
+            is EditRecord -> {
+                for (merge in item.merges.asReversed()) revertMerge(merge)
+                item.drag.restoreStart()
+                refresh(item.drag.cells)
+            }
+            is PointEdit ->
+                if (item.added) item.edge.removePoint(item.index)
+                else { item.edge.insertPoint(item.index, item.x, item.y); refresh(item.edge.cells) }
+        }
+        redoStack.add(item)
         return true
     }
 
     // Возвращает отменённую правку. false: повторять нечего.
     fun redo(): Boolean {
-        val record = redoStack.removeLastOrNull() ?: return false
-        record.drag.vertex.x = record.endX
-        record.drag.vertex.y = record.endY
-        refresh(record.drag)
-        for (merge in record.merges) applyMerge(merge)
-        undoStack.add(record)
+        val item = redoStack.removeLastOrNull() ?: return false
+        when (item) {
+            is EditRecord -> {
+                item.drag.restoreEnd()
+                refresh(item.drag.cells)
+                for (merge in item.merges) applyMerge(merge)
+            }
+            is PointEdit ->
+                if (item.added) item.edge.insertPoint(item.index, item.x, item.y)
+                else { item.edge.removePoint(item.index); refresh(item.edge.cells) }
+        }
+        undoStack.add(item)
         return true
     }
 
-    private fun record(drag: VertexDrag, merges: List<MergeCells>) {
-        undoStack.add(EditRecord(drag, drag.vertex.x, drag.vertex.y, merges.toList()))
-        redoStack.clear()                                     // после новой правки «повторить» не имеет смысла
+    private fun areasOf(cells: List<Cell>): Map<Cell, Float> = cells.associateWith { it.area() }
+
+    private fun record(item: HistoryItem) {
+        undoStack.add(item)
+        redoStack.clear()
         if (undoStack.size > MAX_HISTORY) undoStack.removeAt(0)
     }
 
     // После решения по клетке: ищем следующую, а если больше нет, правка завершена и попадает в историю.
     private fun resolveNext(pending: PendingEdit): Boolean {
         if (advance(pending)) return true
-        record(pending.drag, pending.merges)
+        record(EditRecord(pending.drag, pending.merges.toList()))
         return false
     }
 
@@ -184,7 +289,7 @@ class VertexEditor {
         return small != null
     }
 
-    private fun isTooSmall(cell: Cell, drag: VertexDrag): Boolean {
+    private fun isTooSmall(cell: Cell, drag: EditDrag): Boolean {
         val area = cell.area()
         return area < minCellArea && area < (drag.areasBefore[cell] ?: Float.MAX_VALUE)
     }
@@ -202,7 +307,7 @@ class VertexEditor {
 
     // Пересчитывает габариты клеток, обновляет индекс и просит перерисовать задетые плитки:
     // и там, где клетка была, и там, где стала.
-    private fun refresh(drag: VertexDrag) {
+    private fun refresh(cells: List<Cell>) {
         var dirtyMinX = Float.MAX_VALUE
         var dirtyMinY = Float.MAX_VALUE
         var dirtyMaxX = -Float.MAX_VALUE
@@ -213,7 +318,7 @@ class VertexEditor {
             dirtyMaxX = maxOf(dirtyMaxX, cell.maxX)
             dirtyMaxY = maxOf(dirtyMaxY, cell.maxY)
         }
-        for (cell in drag.cells) {
+        for (cell in cells) {
             if (cell.isRemoved) continue
             include(cell)                    // габариты до пересчёта
             cellIndex.reindex(cell)
@@ -222,10 +327,10 @@ class VertexEditor {
         tileCache.invalidate(dirtyMinX, dirtyMinY, dirtyMaxX, dirtyMaxY)
     }
 
-    // Пересекает ли какое-то из рёбер вершины рёбра чужих клеток поблизости.
-    private fun crossesOtherEdges(drag: VertexDrag): Boolean {
-        val vertex = drag.vertex
-        for (movedEdge in vertex.edges) {
+    // Пересекает ли изменяемое ребро рёбра чужих клеток поблизости.
+    private fun crossesOtherEdges(movedEdges: List<Edge>, ignored: Vertex?): Boolean {
+        val ignored = ignored
+        for (movedEdge in movedEdges) {
             var minX = Float.MAX_VALUE
             var minY = Float.MAX_VALUE
             var maxX = -Float.MAX_VALUE
@@ -238,7 +343,8 @@ class VertexEditor {
             }
             for (cell in cellIndex.cellsIn(minX, minY, maxX, maxY)) {
                 for (other in cell.edges) {
-                    if (other === movedEdge || other.start === vertex || other.end === vertex) continue
+                    if (other === movedEdge) continue
+                    if (ignored != null && (other.start === ignored || other.end === ignored)) continue
                     if (edgesCross(movedEdge, other)) return true
                 }
             }
@@ -255,5 +361,25 @@ class VertexEditor {
             }
         }
         return crossed
+    }
+
+    fun addCurvePoint(edge: Edge, segment: Int, x: Float, y: Float) {
+        edge.insertPoint(segment, x, y)
+        record(PointEdit(edge, segment, x, y, added = true))
+    }
+
+    // null: удалено, иначе текст, почему нельзя.
+    fun removeCurvePoint(edge: Edge, index: Int): String? {
+        val x = edge.points[2 * index]
+        val y = edge.points[2 * index + 1]
+        edge.removePoint(index)
+        val cells = edge.cells
+        if (cells.any { validator.selfIntersects(it) } || crossesOtherEdges(listOf(edge), null)) {
+            edge.insertPoint(index, x, y)
+            return "Нельзя удалить точку: границы пересекутся"
+        }
+        refresh(cells)
+        record(PointEdit(edge, index, x, y, added = false))
+        return null
     }
 }

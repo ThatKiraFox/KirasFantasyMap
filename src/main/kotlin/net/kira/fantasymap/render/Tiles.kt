@@ -8,6 +8,7 @@ import androidx.compose.ui.graphics.ImageBitmap
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.CanvasDrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.LayoutDirection
 import kotlinx.coroutines.CoroutineScope
@@ -24,7 +25,7 @@ import kotlin.math.roundToInt
 const val TILE_SIZE = 512
 const val BASE_SCALE = 0.05f                       // масштаб нулевого уровня, равен минимальному масштабу камеры
 const val MAX_LEVEL = 12
-private const val MAX_CACHED_TILES = 120           // ~1 МБ на плитку
+private const val MAX_CACHED_TILES = 120
 private const val PINNED_LEVELS = 3                // уровни 0..3 рисуются при запуске и не вытесняются
 private const val CURVES_MIN_PIXELS_PER_UNIT = 1.5f    // ниже этого масштаба детали кривых меньше пикселя
 private const val BIG_TILE_SHARE_OF_WORLD = 0.1f       // у плиток крупнее этой доли мира перебираем все клетки, а не берём из индекса
@@ -41,7 +42,8 @@ class TileCache(
     private val cellIndex: CellIndex,
     private val scope: CoroutineScope,
     private val worldWidth: Float,
-    private val worldHeight: Float
+    private val worldHeight: Float,
+    private val maxHeight: Int
 ) {
     private val tiles = object : LinkedHashMap<TileKey, ImageBitmap>(128, 0.75f, true) {
         override fun removeEldestEntry(eldest: MutableMap.MutableEntry<TileKey, ImageBitmap>?): Boolean =
@@ -63,18 +65,15 @@ class TileCache(
         }
     }
 
-    // Только смотрит в кэш, ничего не запрашивает.
     fun peek(key: TileKey): ImageBitmap? =
         if (key.level <= PINNED_LEVELS) pinnedTiles[key] else tiles[key]
 
-    // Готовую плитку возвращает сразу, иначе ставит её рисоваться в фоне и возвращает null.
     fun get(key: TileKey): ImageBitmap? {
         val ready = peek(key)
         if (ready == null) request(key, force = false)
         return ready
     }
 
-    // Перерисовывает плитки, которых коснулась правка. Пока новая картинка не готова, показывается старая.
     fun invalidate(minX: Float, minY: Float, maxX: Float, maxY: Float) {
         val cachedKeys = tiles.keys.toList() + pinnedTiles.keys
         for (key in cachedKeys) {
@@ -91,7 +90,7 @@ class TileCache(
             return
         }
         scope.launch {
-            val bitmap = withContext(Dispatchers.Default) { renderTile(grid, cellIndex, key, worldWidth, worldHeight) }
+            val bitmap = withContext(Dispatchers.Default) { renderTile(grid, cellIndex, key, worldWidth, worldHeight, maxHeight) }
             if (key.level <= PINNED_LEVELS) pinnedTiles[key] = bitmap else tiles[key] = bitmap
             pending.remove(key)
             if (outdated.remove(key)) request(key, force = false)
@@ -108,7 +107,7 @@ class TileCache(
 
 private val backgroundColor = Color(0xFF1E2A3A)
 
-fun renderTile(grid: MapGrid, cellIndex: CellIndex, key: TileKey, worldWidth: Float, worldHeight: Float): ImageBitmap {
+fun renderTile(grid: MapGrid, cellIndex: CellIndex, key: TileKey, worldWidth: Float, worldHeight: Float, maxHeight: Int): ImageBitmap {
     val pixelsPerWorldUnit = pixelsPerUnit(key.level)
     val tileWorldSize = TILE_SIZE / pixelsPerWorldUnit
     val minX = key.column * tileWorldSize
@@ -117,7 +116,6 @@ fun renderTile(grid: MapGrid, cellIndex: CellIndex, key: TileKey, worldWidth: Fl
     val maxY = minY + tileWorldSize
     val showCurves = pixelsPerWorldUnit >= CURVES_MIN_PIXELS_PER_UNIT
 
-    // У маленьких плиток клетки берём из индекса, у больших проще перебрать все.
     val candidates: Collection<Cell> =
         if (tileWorldSize * tileWorldSize > worldWidth * worldHeight * BIG_TILE_SHARE_OF_WORLD) grid.cells
         else cellIndex.cellsIn(minX, minY, maxX, maxY)
@@ -134,12 +132,12 @@ fun renderTile(grid: MapGrid, cellIndex: CellIndex, key: TileKey, worldWidth: Fl
             var isFirstPoint = true
             cell.forEachPoint(includeEdgePoints = showCurves) { x, y ->
                 val pixelX = (x - minX) * pixelsPerWorldUnit
-                val pixelY = (maxY - y) * pixelsPerWorldUnit      // у плитки верх это maxY
+                val pixelY = (maxY - y) * pixelsPerWorldUnit
                 if (isFirstPoint) { path.moveTo(pixelX, pixelY); isFirstPoint = false }
                 else path.lineTo(pixelX, pixelY)
             }
             path.close()
-            val color = cellColor(cell.height)
+            val color = testColor(cell.moisture, cell.height)
             drawPath(path, color)
             drawPath(path, color, style = seamStroke)                // обводка того же цвета закрывает швы между клетками
         }
@@ -147,6 +145,27 @@ fun renderTile(grid: MapGrid, cellIndex: CellIndex, key: TileKey, worldWidth: Fl
     return bitmap
 }
 
-fun cellColor(cellHeight: Int): Color =
-    if (cellHeight < 0) Color(0, 0, 126 + cellHeight)
-    else Color(cellHeight.coerceIn(0, 255), (225 - cellHeight).coerceIn(0, 255), 0)
+fun cellColor(cellHeight: Int, maxHeight: Int): Color =
+    if (cellHeight < 0) {
+        val fraction = (cellHeight.toFloat() / -999f).coerceIn(0f, 1f)
+        return lerp(Color(0xFF64A0C2), Color(0xFF0B5EAC), fraction)
+    }
+
+    else {
+        val colors = listOf(
+            Color(0xFF778F51), // 1
+            Color(0xFF456C35), // 2
+            Color(0xFF983B45), // 3
+            Color(0xFF92311E)  // 4
+        )
+        val fraction = (cellHeight.toFloat() / maxHeight.toFloat()).coerceIn(0f, 1f)
+        val scaled = fraction * (colors.size - 1)
+        val index = scaled.toInt().coerceAtMost(colors.size - 2)
+        val localT = scaled - index
+
+        return lerp(colors[index], colors[index + 1], localT)
+    }
+
+fun testColor(cellValue: Float, cellHeight: Int): Color =
+    if (cellHeight < 0) {Color.Blue}
+    else lerp(Color.Red, Color.Green, cellValue)

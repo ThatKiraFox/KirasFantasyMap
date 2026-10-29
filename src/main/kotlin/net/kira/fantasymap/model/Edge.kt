@@ -49,4 +49,20 @@ class Edge(
         }
         action(previousX, previousY, end.x, end.y)
     }
+
+    fun insertPoint(index: Int, x: Float, y: Float) {
+        val result = FloatArray(points.size + 2)
+        points.copyInto(result, 0, 0, index * 2)
+        result[index * 2] = x
+        result[index * 2 + 1] = y
+        points.copyInto(result, index * 2 + 2, index * 2, points.size)
+        points = result
+    }
+
+    fun removePoint(index: Int) {
+        val result = FloatArray(points.size - 2)
+        points.copyInto(result, 0, 0, index * 2)
+        points.copyInto(result, index * 2, index * 2 + 2, points.size)
+        points = result
+    }
 }
