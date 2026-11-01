@@ -3,6 +3,11 @@ package net.kira.fantasymap.model
 import kotlin.math.abs
 
 class Cell(val id: Int) {
+
+    constructor(id: Int, height: Int) : this(id) {
+        this.height = height
+    }
+
     val edges = ArrayList<Edge>()
 
     var minX = 0f
@@ -19,6 +24,9 @@ class Cell(val id: Int) {
     var height: Int = -1
     var temperature: Float = -1f
     var moisture: Float = 1f
+    var water: Float = 0f
+    var flowsTo: Cell? = null
+    var isLake: Boolean = false
 
     var isRemoved = false
 
@@ -128,5 +136,15 @@ class Cell(val id: Int) {
 
     fun updateLatitude(value: Float) {
         latitude = value
+    }
+
+    fun orderedCorners(): List<Vertex> {
+        val result = ArrayList<Vertex>(edges.size)
+        var current = firstVertex()
+        for (edge in edges) {
+            result.add(current)
+            current = edge.otherVertex(current)
+        }
+        return result
     }
 }

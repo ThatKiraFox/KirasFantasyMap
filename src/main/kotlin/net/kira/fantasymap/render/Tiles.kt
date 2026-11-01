@@ -1,22 +1,26 @@
 package net.kira.fantasymap.render
 
-import net.kira.fantasymap.model.CellIndex
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
-import androidx.compose.ui.graphics.Canvas
-import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.ImageBitmap
-import androidx.compose.ui.graphics.Path
+import androidx.compose.ui.graphics.*
 import androidx.compose.ui.graphics.drawscope.CanvasDrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.LayoutDirection
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import net.kira.fantasymap.generation.hydrology.RIVER_THRESHOLD
+import net.kira.fantasymap.generation.hydrology.riverWidth
 import net.kira.fantasymap.model.Cell
+import net.kira.fantasymap.model.CellIndex
+import net.kira.fantasymap.model.PointShape.Lake
 import net.kira.fantasymap.model.MapGrid
+import net.kira.fantasymap.model.PointShape.River
+import java.util.concurrent.locks.ReentrantReadWriteLock
+import kotlin.concurrent.read
+import kotlin.concurrent.write
 import kotlin.math.floor
 import kotlin.math.log2
 import kotlin.math.pow
@@ -29,6 +33,8 @@ private const val MAX_CACHED_TILES = 120
 private const val PINNED_LEVELS = 3                // уровни 0..3 рисуются при запуске и не вытесняются
 private const val CURVES_MIN_PIXELS_PER_UNIT = 1.5f    // ниже этого масштаба детали кривых меньше пикселя
 private const val BIG_TILE_SHARE_OF_WORLD = 0.1f       // у плиток крупнее этой доли мира перебираем все клетки, а не берём из индекса
+private const val THIN_RIVER_PIXELS = 1.5f        // реки, самая широкая часть которых тоньше этого (в пикселях плитки), рисуются одной тонкой линией
+private const val THIN_RIVER_MIN_ALPHA = 0.12f    // насколько видна самая тонкая река: меньше значение, меньше видны реки при отдалении
 
 data class TileKey(val level: Int, val column: Int, val row: Int)
 
@@ -52,6 +58,8 @@ class TileCache(
     private val pinnedTiles = HashMap<TileKey, ImageBitmap>()      // нижние уровни, не вытесняются
     private val pending = HashSet<TileKey>()                       // плитки, которые сейчас рисуются
     private val outdated = HashSet<TileKey>()                      // плитки, которые правка задела, пока они рисовались
+    private val gridLock = ReentrantReadWriteLock()
+
 
     // Нижние уровни заказываем после видимых плиток, чтобы они не отнимали у них ядра.
     fun prerenderLowLevels() {
@@ -90,7 +98,16 @@ class TileCache(
             return
         }
         scope.launch {
-            val bitmap = withContext(Dispatchers.Default) { renderTile(grid, cellIndex, key, worldWidth, worldHeight, maxHeight) }
+            val bitmap = withContext(Dispatchers.Default) {
+                gridLock.read {
+                    val start = System.currentTimeMillis()
+                    try {
+                        renderTile(grid, cellIndex, key, worldWidth, worldHeight, maxHeight)
+                    } finally {
+                        println("tile $key: ${System.currentTimeMillis() - start} ms")
+                    }
+                }
+            }
             if (key.level <= PINNED_LEVELS) pinnedTiles[key] = bitmap else tiles[key] = bitmap
             pending.remove(key)
             if (outdated.remove(key)) request(key, force = false)
@@ -103,9 +120,9 @@ class TileCache(
         val tileMinY = key.row * size
         return tileMinX <= maxX && tileMinX + size >= minX && tileMinY <= maxY && tileMinY + size >= minY
     }
-}
 
-private val backgroundColor = Color(0xFF1E2A3A)
+    fun <T> editingGrid(action: () -> T): T = gridLock.write(action)
+}
 
 fun renderTile(grid: MapGrid, cellIndex: CellIndex, key: TileKey, worldWidth: Float, worldHeight: Float, maxHeight: Int): ImageBitmap {
     val pixelsPerWorldUnit = pixelsPerUnit(key.level)
@@ -122,6 +139,7 @@ fun renderTile(grid: MapGrid, cellIndex: CellIndex, key: TileKey, worldWidth: Fl
 
     val bitmap = ImageBitmap(TILE_SIZE, TILE_SIZE)
     val canvas = Canvas(bitmap)
+
     CanvasDrawScope().draw(Density(1f), LayoutDirection.Ltr, canvas, Size(TILE_SIZE.toFloat(), TILE_SIZE.toFloat())) {
         drawRect(backgroundColor)
         val path = Path()
@@ -137,27 +155,94 @@ fun renderTile(grid: MapGrid, cellIndex: CellIndex, key: TileKey, worldWidth: Fl
                 else path.lineTo(pixelX, pixelY)
             }
             path.close()
-            val color = testColor(cell.moisture, cell.height)
+            val color = cellColor(cell.height, maxHeight)
             drawPath(path, color)
             drawPath(path, color, style = seamStroke)                // обводка того же цвета закрывает швы между клетками
+        }
+        for (lake in grid.lakes) {
+            if (lake.maxX < minX || lake.minX > maxX || lake.maxY < minY || lake.minY > maxY) continue
+            addLakePath(path, lake, minX, maxY, pixelsPerWorldUnit)
+            drawPath(path, riverColor)
+        }
+        for (cell in candidates) {
+            if (cell.isRemoved || cell.maxX < minX || cell.minX > maxX || cell.maxY < minY || cell.minY > maxY) continue
+            for (edge in cell.edges) {
+                if (edge.riverWater <= 0f || edge.cells.first() !== cell) continue    // каждое ребро рисуем один раз
+                path.reset()
+                path.moveTo((edge.start.x - minX) * pixelsPerWorldUnit, (maxY - edge.start.y) * pixelsPerWorldUnit)
+                if (showCurves) {
+                    for (i in edge.points.indices step 2) {
+                        path.lineTo((edge.points[i] - minX) * pixelsPerWorldUnit, (maxY - edge.points[i + 1]) * pixelsPerWorldUnit)
+                    }
+                }
+                path.lineTo((edge.end.x - minX) * pixelsPerWorldUnit, (maxY - edge.end.y) * pixelsPerWorldUnit)
+                drawPath(
+                    path, riverColor,
+                    style = Stroke(width = riverWidth(edge.riverWater) * pixelsPerWorldUnit, cap = StrokeCap.Round, join = StrokeJoin.Round)
+                )
+            }
+        }
+        for (river in grid.rivers) {
+            val margin = river.margin
+            if (river.maxX + margin < minX || river.minX - margin > maxX || river.maxY + margin < minY || river.minY - margin > maxY) continue
+            if (margin * pixelsPerWorldUnit < THIN_RIVER_PIXELS) {
+                // Тонкая река: одна линия средней толщины. Кусочки тоньше пикселя накладываются друг на друга и копят непрозрачность.
+                val points = river.points
+                path.reset()
+                path.moveTo((points[0] - minX) * pixelsPerWorldUnit, (maxY - points[1]) * pixelsPerWorldUnit)
+                for (i in 1 until points.size / 2) {
+                    path.lineTo((points[2 * i] - minX) * pixelsPerWorldUnit, (maxY - points[2 * i + 1]) * pixelsPerWorldUnit)
+                }
+                val widthPixels = (riverWidth(river.startWater) + riverWidth(river.endWater)) / 2f * pixelsPerWorldUnit
+                drawPath(
+                    path, riverColor.copy(alpha = widthPixels.coerceIn(THIN_RIVER_MIN_ALPHA, 1f)),
+                    style = Stroke(width = maxOf(widthPixels, 1f), cap = StrokeCap.Round, join = StrokeJoin.Round)
+                )
+            } else {
+                river.forEachWidthChunk(pixelsPerWorldUnit) { x0, y0, x1, y1, width ->
+                    drawLine(
+                        riverColor,
+                        Offset((x0 - minX) * pixelsPerWorldUnit, (maxY - y0) * pixelsPerWorldUnit),
+                        Offset((x1 - minX) * pixelsPerWorldUnit, (maxY - y1) * pixelsPerWorldUnit),
+                        strokeWidth = width * pixelsPerWorldUnit,
+                        cap = StrokeCap.Round
+                    )
+                }
+            }
         }
     }
     return bitmap
 }
 
+fun addLakePath(path: Path, lake: Lake, originX: Float, originY: Float, scale: Float) {
+    val count = lake.points.size / 2
+    fun pixelX(i: Int) = (lake.points[2 * (i % count)] - originX) * scale
+    fun pixelY(i: Int) = (originY - lake.points[2 * (i % count) + 1]) * scale
+    path.reset()
+    path.moveTo((pixelX(count - 1) + pixelX(0)) / 2f, (pixelY(count - 1) + pixelY(0)) / 2f)
+    for (i in 0 until count) {
+        path.quadraticBezierTo(pixelX(i), pixelY(i), (pixelX(i) + pixelX(i + 1)) / 2f, (pixelY(i) + pixelY(i + 1)) / 2f)
+    }
+    path.close()
+}
+
+fun addRiverPath(path: Path, river: River, originX: Float, originY: Float, scale: Float) {
+    val points = river.points
+    path.reset()
+    path.moveTo((points[0] - originX) * scale, (originY - points[1]) * scale)
+    for (i in 1 until points.size / 2) {
+        path.lineTo((points[2 * i] - originX) * scale, (originY - points[2 * i + 1]) * scale)
+    }
+}
+
 fun cellColor(cellHeight: Int, maxHeight: Int): Color =
-    if (cellHeight < 0) {
+    if (cellHeight <= 0) {
         val fraction = (cellHeight.toFloat() / -999f).coerceIn(0f, 1f)
-        return lerp(Color(0xFF64A0C2), Color(0xFF0B5EAC), fraction)
+        return lerp(WATER_COLORS[0], WATER_COLORS[1], fraction)
     }
 
     else {
-        val colors = listOf(
-            Color(0xFF778F51), // 1
-            Color(0xFF456C35), // 2
-            Color(0xFF983B45), // 3
-            Color(0xFF92311E)  // 4
-        )
+        val colors = GROUND_COLORS
         val fraction = (cellHeight.toFloat() / maxHeight.toFloat()).coerceIn(0f, 1f)
         val scaled = fraction * (colors.size - 1)
         val index = scaled.toInt().coerceAtMost(colors.size - 2)
@@ -167,5 +252,5 @@ fun cellColor(cellHeight: Int, maxHeight: Int): Color =
     }
 
 fun testColor(cellValue: Float, cellHeight: Int): Color =
-    if (cellHeight < 0) {Color.Blue}
-    else lerp(Color.Red, Color.Green, cellValue)
+    if (cellHeight < 0) {Color.Black}
+    else lerp(Color(162, 186, 229, 255), Color(3, 9, 68, 255), (cellValue / RIVER_THRESHOLD).coerceIn(0f, 1f))

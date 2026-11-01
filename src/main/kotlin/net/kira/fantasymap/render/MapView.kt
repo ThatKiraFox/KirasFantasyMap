@@ -1,5 +1,7 @@
 package net.kira.fantasymap.render
 
+import net.kira.fantasymap.generation.ShapeDrag
+import net.kira.fantasymap.generation.ShapeEditor
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusable
@@ -7,6 +9,7 @@ import androidx.compose.foundation.gestures.detectDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.material.Button
+import androidx.compose.material.Slider
 import androidx.compose.material.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.ExperimentalComposeUiApi
@@ -31,7 +34,11 @@ import kotlinx.coroutines.delay
 import net.kira.fantasymap.Camera
 import net.kira.fantasymap.generation.*
 import net.kira.fantasymap.model.*
+import net.kira.fantasymap.model.PointShape.Lake
+import net.kira.fantasymap.model.PointShape.PointShape
+import net.kira.fantasymap.model.PointShape.River
 import kotlin.math.floor
+import kotlin.math.ln
 import kotlin.math.pow
 import kotlin.math.roundToInt
 import kotlin.math.sqrt
@@ -41,15 +48,15 @@ private const val MAIN_HANDLE_PICK_RADIUS = 16f      // в пикселях эк
 private const val CURVE_HANDLE_PICK_RADIUS = 9f
 private const val CURVE_HANDLES_MIN_SCALE = 30f      // ближе этого масштаба показываем точки кривых
 private const val LINE_PICK_RADIUS = 6f
+private const val RIVER_PICK_RADIUS = 8f
+// в пикселях экрана, для клика по реке
+private const val WATER_MIN = 10f
+private const val WATER_MAX = 100_000f
 
-private val invalidColor = Color(0xFFFF4444)
-private val neighborColor = Color(0xFF66CCFF)
-private val smallCellColor = Color(0xFFFFA500)
-private val curvePointColor = Color(0xFF7CFC9A)
-private val handleBorderColor = Color(0xFF1E2A3A)
+private fun waterToSlider(water: Float): Float = ln(water.coerceIn(WATER_MIN, WATER_MAX) / WATER_MIN) / ln(WATER_MAX / WATER_MIN)
+private fun sliderToWater(value: Float): Float = WATER_MIN * (WATER_MAX / WATER_MIN).pow(value)
 
-
-
+private class RiverHit(val index: Int, val x: Float, val y: Float)
 private class SegmentHit(val edge: Edge, val segment: Int, val x: Float, val y: Float)
 
 private class RenderStats {
@@ -85,13 +92,37 @@ fun MapView(grid: MapGrid, worldWidth: Float, worldHeight: Float, maxHeight: Int
     var ignoreDrag by remember { mutableStateOf(false) }     // после Esc игнорируем остаток жеста, пока не отпустят кнопку
     var lastPress by remember { mutableStateOf(Offset.Zero) }  // где нажали кнопку: по этому месту выбираем точку
     var message by remember { mutableStateOf<String?>(null) }
+    val shapeEditor = remember { ShapeEditor(grid, tileCache, editor) }
+    var addingLake by remember { mutableStateOf(false) }
+    var addingRiver by remember { mutableStateOf(false) }
+    var selectedShape by remember { mutableStateOf<PointShape?>(null) }
+    var shapeDrag by remember { mutableStateOf<ShapeDrag?>(null) }
+    var riverPrompt by remember { mutableStateOf<River?>(null) }    // река, по которой ждём решение: применить или отменить
+    var waterEdit by remember { mutableStateOf<Pair<Float, Float>?>(null) }
 
     fun worldX(screenX: Float) = camera.screenToWorldX(screenX, canvasSize.width.toFloat())
     fun worldY(screenY: Float) = camera.screenToWorldY(screenY, canvasSize.height.toFloat())
 
+    // true: уйти с реки сейчас нельзя, показан вопрос. keep: фигура, на которую переходим (если это сама грязная река, всё в порядке).
+    fun blockedByDirtyRiver(keep: PointShape?): Boolean {
+        val dirty = editor.dirtyRiver() ?: return false
+        if (dirty === keep) return false
+        riverPrompt = dirty
+        return true
+    }
+
+
+
+    // После удаления реки, undo и redo: если есть не применённая река, которую мы не редактируем, спрашиваем сразу.
+    fun askAboutRiver() {
+        val dirty = editor.dirtyRiver()
+        if (dirty != null && dirty !== selectedShape) riverPrompt = dirty
+    }
+
     fun setEditMode(enabled: Boolean) {
+        if (!enabled && blockedByDirtyRiver(null)) return
         editMode = enabled
-        if (!enabled) selectedCell = null
+        if (!enabled) { selectedCell = null; selectedShape = null; addingLake = false; addingRiver = false }
         message = null
     }
 
@@ -103,17 +134,72 @@ fun MapView(grid: MapGrid, worldWidth: Float, worldHeight: Float, maxHeight: Int
         focusRequester.requestFocus()
     }
 
+    // После undo и redo: показываем реку, которой коснулись, и спрашиваем про не применённую.
+    fun afterRiverHistoryChange() {
+        editor.touchedRiver?.let { river ->
+            if (river in grid.rivers) {
+                selectedShape = river
+                selectedCell = null
+            }
+        }
+        askAboutRiver()
+    }
+
     fun undoEdit() {
-        if (drag != null || pending != null) return
+        if (drag != null || shapeDrag != null || pending != null || riverPrompt != null) return
         message = if (editor.undo()) null else "Нечего отменять"
+        selectedShape?.let { shape ->
+            val exists = when (shape) {
+                is Lake -> shape in grid.lakes
+                is River -> shape in grid.rivers
+            }
+            if (!exists) selectedShape = null
+        }
         if (selectedCell?.isRemoved == true) selectedCell = null
+        afterRiverHistoryChange()
         focusRequester.requestFocus()
     }
 
     fun redoEdit() {
-        if (drag != null || pending != null) return
+        if (drag != null || shapeDrag != null || pending != null || riverPrompt != null) return
         message = if (editor.redo()) null else "Нечего повторять"
+        selectedShape?.let { shape ->
+            val exists = when (shape) {
+                is Lake -> shape in grid.lakes
+                is River -> shape in grid.rivers
+            }
+            if (!exists) selectedShape = null
+        }
         if (selectedCell?.isRemoved == true) selectedCell = null
+        afterRiverHistoryChange()
+        focusRequester.requestFocus()
+    }
+
+    fun deleteSelectedShape() {
+        val shape = selectedShape ?: return
+        if (drag != null || shapeDrag != null || pending != null || riverPrompt != null) return
+        when (shape) {
+            is Lake -> shapeEditor.removeLake(shape)
+            is River -> shapeEditor.removeRiver(shape)
+        }
+        selectedShape = null
+        message = null
+        askAboutRiver()
+        focusRequester.requestFocus()
+    }
+
+    fun editRiverWater(river: River, start: Float, end: Float) {
+        if (waterEdit == null) waterEdit = Pair(river.startWater, river.endWater)
+        editor.setRiverWater(river, start, end)
+        pendingVersion++
+    }
+
+    fun finishRiverWater(river: River) {
+        val before = waterEdit ?: return
+        waterEdit = null
+        if (before.first != river.startWater || before.second != river.endWater) {
+            editor.recordRiverWater(river, before.first, before.second)
+        }
         focusRequester.requestFocus()
     }
 
@@ -155,6 +241,21 @@ fun MapView(grid: MapGrid, worldWidth: Float, worldHeight: Float, maxHeight: Int
         return bestEdge?.let { Handle.CurvePoint(it, bestIndex) }
     }
 
+    fun findShapePoint(shape: PointShape, screenX: Float, screenY: Float): Int? {
+        var best: Int? = null
+        var bestDistance = MAIN_HANDLE_PICK_RADIUS
+        for (i in 0 until shape.points.size / 2) {
+            val dx = camera.worldToScreenX(shape.points[2 * i], canvasSize.width.toFloat()) - screenX
+            val dy = camera.worldToScreenY(shape.points[2 * i + 1], canvasSize.height.toFloat()) - screenY
+            val distance = sqrt(dx * dx + dy * dy)
+            if (distance <= bestDistance) {
+                best = i
+                bestDistance = distance
+            }
+        }
+        return best
+    }
+
     fun findSegment(cell: Cell, screenX: Float, screenY: Float): SegmentHit? {
         val width = canvasSize.width.toFloat()
         val height = canvasSize.height.toFloat()
@@ -179,6 +280,31 @@ fun MapView(grid: MapGrid, worldWidth: Float, worldHeight: Float, maxHeight: Int
                     }
                 }
                 index++
+            }
+        }
+        return best
+    }
+
+    fun findRiverSegment(river: River, screenX: Float, screenY: Float): RiverHit? {
+        val width = canvasSize.width.toFloat()
+        val height = canvasSize.height.toFloat()
+        val points = river.points
+        var best: RiverHit? = null
+        var bestDistance = LINE_PICK_RADIUS
+        for (i in 0 until points.size / 2 - 1) {
+            val sax = camera.worldToScreenX(points[2 * i], width)
+            val say = camera.worldToScreenY(points[2 * i + 1], height)
+            val dx = camera.worldToScreenX(points[2 * i + 2], width) - sax
+            val dy = camera.worldToScreenY(points[2 * i + 3], height) - say
+            val lengthSquared = dx * dx + dy * dy
+            if (lengthSquared <= 0f) continue
+            val t = (((screenX - sax) * dx + (screenY - say) * dy) / lengthSquared).coerceIn(0f, 1f)
+            val px = sax + t * dx
+            val py = say + t * dy
+            val distance = sqrt((screenX - px) * (screenX - px) + (screenY - py) * (screenY - py))
+            if (distance <= bestDistance) {
+                best = RiverHit(i + 1, worldX(px), worldY(py))
+                bestDistance = distance
             }
         }
         return best
@@ -215,14 +341,14 @@ fun MapView(grid: MapGrid, worldWidth: Float, worldHeight: Float, maxHeight: Int
     Box(
         Modifier
             .fillMaxSize()
-            .background(Color(0xFF1E2A3A))
+            .background(mapBackgroundColor)
             .focusRequester(focusRequester)
             .focusable()
             .onPreviewKeyEvent { event ->
                 if (event.type != KeyEventType.KeyDown) return@onPreviewKeyEvent false
                 when (event.key) {
                     Key.E -> {
-                        if (drag == null && pending == null) setEditMode(!editMode)
+                        if (drag == null && shapeDrag == null && pending == null && riverPrompt == null) setEditMode(!editMode)
                         true
                     }
                     Key.Z -> {
@@ -239,20 +365,37 @@ fun MapView(grid: MapGrid, worldWidth: Float, worldHeight: Float, maxHeight: Int
                     }
                     Key.Escape -> {
                         val currentDrag = drag
+                        val currentShapeDrag = shapeDrag
                         val currentPending = pending
                         when {
-                            currentDrag != null -> {                  // Esc во время перетаскивания отменяет правку
+                            riverPrompt != null -> Unit               // ответить надо кнопками
+                            currentDrag != null -> {
                                 editor.cancel(currentDrag)
                                 drag = null
                                 ignoreDrag = true
                                 message = "Правка отменена"
                             }
+                            currentShapeDrag != null -> {
+                                shapeEditor.cancel(currentShapeDrag)
+                                shapeDrag = null
+                                ignoreDrag = true
+                                message = "Правка отменена"
+                            }
+                            addingLake || addingRiver -> {
+                                addingLake = false
+                                addingRiver = false
+                                message = null
+                            }
                             currentPending != null -> abortPending(currentPending)
+                            selectedShape != null -> {
+                                if (!blockedByDirtyRiver(null)) selectedShape = null
+                            }
                             selectedCell != null -> selectedCell = null
                             else -> setEditMode(false)
                         }
                         true
                     }
+                    Key.Delete -> if (editMode) { deleteSelectedShape(); true } else false
                     else -> false
                 }
             }
@@ -265,20 +408,31 @@ fun MapView(grid: MapGrid, worldWidth: Float, worldHeight: Float, maxHeight: Int
                     detectDragGestures(
                         onDragStart = { start ->
                             ignoreDrag = false
-                            val cell = selectedCell
-                            if (editMode && cell != null && pending == null) {
-                                val handle = findHandle(cell, lastPress.x, lastPress.y) ?: findHandle(cell, start.x, start.y)
-                                if (handle != null) {
-                                    drag = editor.begin(handle, worldX(start.x), worldY(start.y))
-                                    message = null
+                            if (editMode && pending == null && riverPrompt == null) {
+                                val shape = selectedShape
+                                val cell = selectedCell
+                                if (shape != null) {
+                                    val index = findShapePoint(shape, lastPress.x, lastPress.y) ?: findShapePoint(shape, start.x, start.y)
+                                    if (index != null) {
+                                        shapeDrag = shapeEditor.begin(shape, index, worldX(start.x), worldY(start.y))
+                                        message = null
+                                    }
+                                } else if (cell != null) {
+                                    val handle = findHandle(cell, lastPress.x, lastPress.y) ?: findHandle(cell, start.x, start.y)
+                                    if (handle != null) {
+                                        drag = editor.begin(handle, worldX(start.x), worldY(start.y))
+                                        message = null
+                                    }
                                 }
                             }
                         },
                         onDrag = { change, dragAmount ->
                             val current = drag
+                            val currentLake = shapeDrag
                             when {
                                 ignoreDrag -> Unit
                                 current != null -> editor.move(current, worldX(change.position.x), worldY(change.position.y))
+                                currentLake != null -> shapeEditor.move(currentLake, worldX(change.position.x), worldY(change.position.y))
                                 else -> {
                                     camera.centerX -= dragAmount.x / camera.scale
                                     camera.centerY += dragAmount.y / camera.scale
@@ -300,6 +454,11 @@ fun MapView(grid: MapGrid, worldWidth: Float, worldHeight: Float, maxHeight: Int
                                     }
                                 }
                             }
+                            val currentLake = shapeDrag
+                            if (currentLake != null) {
+                                shapeDrag = null
+                                shapeEditor.finish(currentLake)
+                            }
                         },
                         onDragCancel = {
                             ignoreDrag = false
@@ -308,12 +467,32 @@ fun MapView(grid: MapGrid, worldWidth: Float, worldHeight: Float, maxHeight: Int
                                 drag = null
                                 editor.cancel(current)
                             }
+                            val currentLake = shapeDrag
+                            if (currentLake != null) {
+                                shapeDrag = null
+                                shapeEditor.cancel(currentLake)
+                            }
                         }
                     )
                 }
                 .pointerInput(Unit) {
                     detectTapGestures(onPress = { offset -> lastPress = offset }) { tap ->
                         if (!editMode) return@detectTapGestures
+                        if (riverPrompt != null) {
+                            message = "Сначала примените изменения реки или отмените их."
+                            return@detectTapGestures
+                        }
+                        if (addingLake || addingRiver) {
+                            if (blockedByDirtyRiver(null)) return@detectTapGestures
+                            val x = worldX(tap.x)
+                            val y = worldY(tap.y)
+                            selectedShape = if (addingLake) shapeEditor.addLake(x, y, 30f / camera.scale) else shapeEditor.addRiver(x, y, 40f / camera.scale)
+                            addingLake = false
+                            addingRiver = false
+                            selectedCell = null
+                            message = null
+                            return@detectTapGestures
+                        }
                         val tapped = cellIndex.findCell(worldX(tap.x), worldY(tap.y))
                         val currentPending = pending
                         if (currentPending != null) {
@@ -340,7 +519,28 @@ fun MapView(grid: MapGrid, worldWidth: Float, worldHeight: Float, maxHeight: Int
                             }
                         }
 
-                        selectedCell = tapped                       // клик мимо клеток снимает выбор
+                        val shape = selectedShape
+                        if (shape is River && findShapePoint(shape, tap.x, tap.y) == null) {
+                            val hit = findRiverSegment(shape, tap.x, tap.y)
+                            if (hit != null) {
+                                shapeEditor.addRiverPoint(shape, hit.index, hit.x, hit.y)
+                                message = null
+                                return@detectTapGestures
+                            }
+                        }
+
+// река приоритетнее озера, озеро приоритетнее клетки
+                        val tappedShape: PointShape? =
+                            shapeEditor.findRiver(worldX(tap.x), worldY(tap.y), RIVER_PICK_RADIUS / camera.scale)
+                                ?: shapeEditor.findLake(worldX(tap.x), worldY(tap.y))
+                        if (blockedByDirtyRiver(tappedShape)) return@detectTapGestures
+                        if (tappedShape != null) {
+                            selectedShape = tappedShape
+                            selectedCell = null
+                        } else {
+                            selectedShape = null
+                            selectedCell = tapped                       // клик мимо клеток снимает выбор
+                        }
                         message = null
                     }
                 }
@@ -350,7 +550,17 @@ fun MapView(grid: MapGrid, worldWidth: Float, worldHeight: Float, maxHeight: Int
                     camera.zoomAt(change.position.x, change.position.y, canvasSize.width.toFloat(), canvasSize.height.toFloat(), factor)
                 }
                 .onPointerEvent(PointerEventType.Press) { event ->
-                    if (!event.buttons.isSecondaryPressed || !editMode || drag != null || pending != null) return@onPointerEvent
+                    if (!event.buttons.isSecondaryPressed || !editMode || drag != null || pending != null || shapeDrag != null || riverPrompt != null) return@onPointerEvent
+
+                    // ПКМ по точке выбранной реки удаляет её
+                    val selectedRiver = selectedShape
+                    if (selectedRiver is River) {
+                        val position = event.changes.first().position
+                        val index = findShapePoint(selectedRiver, position.x, position.y)
+                        if (index != null) message = shapeEditor.removeRiverPoint(selectedRiver, index)
+                        return@onPointerEvent
+                    }
+
                     val cell = selectedCell ?: return@onPointerEvent
                     val position = event.changes.first().position
                     when (val handle = findHandle(cell, position.x, position.y)) {
@@ -413,36 +623,37 @@ fun MapView(grid: MapGrid, worldWidth: Float, worldHeight: Float, maxHeight: Int
                 val failed = !currentDrag.isValid
                 for (cell in currentDrag.cells) {
                     val strokeColor = when {
-                        failed -> invalidColor
-                        cell === selected -> Color.White
-                        else -> neighborColor
+                        failed -> invalidCellColor
+                        cell === selected -> standardCellColor
+                        else -> neighborCellColor
                     }
-                    val fillColor = if (failed) Color(0x44FF4444) else Color(0x33FFFFFF)
+                    val fillColor = if (failed) failedEdit else edit
                     drawOutline(cell, camera, outlinePath, strokeColor, fillColor)
                 }
             } else if (selected != null) {
-                drawOutline(selected, camera, outlinePath, Color.White, Color(0x33FFFFFF))
+                drawOutline(selected, camera, outlinePath, standardCellColor, standardCellOutline)
             }
             if (currentPending != null) {
                 for (candidate in currentPending.plans.keys) {
-                    drawOutline(candidate, camera, outlinePath, neighborColor, Color(0x5566CCFF))
+                    drawOutline(candidate, camera, outlinePath, neighborCellColor, neighborCellOutline)
                 }
-                currentPending.smallCell?.let { drawOutline(it, camera, outlinePath, smallCellColor, Color(0x66FFA500)) }
+                currentPending.smallCell?.let { drawOutline(it, camera, outlinePath, smallCellColor, smallCellOutline) }
             }
             if (selected != null && currentPending == null) {
                 drawHandles(selected, camera, currentDrag, showCurvePoints = camera.scale >= CURVE_HANDLES_MIN_SCALE)
             }
+            selectedShape?.let { drawShape(it, camera, outlinePath, shapeDrag) }
         }
 
         Column(Modifier.padding(8.dp)) {
             Text(
                 "FPS: $fps   tiles: $shownTiles, waiting: $shownWaiting",
-                color = Color.White,
-                modifier = Modifier.background(Color(0x99000000)).padding(4.dp)
+                color = standardTextColor,
+                modifier = Modifier.background(standardTextBackground).padding(4.dp)
             )
             Spacer(Modifier.height(4.dp))
             Button(onClick = {
-                if (drag == null && pending == null) setEditMode(!editMode)
+                if (drag == null && shapeDrag == null && pending == null && riverPrompt == null) setEditMode(!editMode)
                 focusRequester.requestFocus()
             }) {
                 Text(if (editMode) "Редактирование: ВКЛ (E / Esc)" else "Редактирование: ВЫКЛ (E)")
@@ -451,21 +662,81 @@ fun MapView(grid: MapGrid, worldWidth: Float, worldHeight: Float, maxHeight: Int
                 @Suppress("UNUSED_VARIABLE")
                 val version = pendingVersion               // чтобы текст обновлялся после каждого решения
                 val currentDrag = drag
+                val currentShapeDrag = shapeDrag
                 val currentPending = pending
                 val cell = selectedCell
+                val prompt = riverPrompt
                 val zoomedIn = camera.scale >= CURVE_HANDLES_MIN_SCALE
                 val hint = when {
+                    prompt != null -> "Примените изменения реки к клеткам или отмените их."
                     currentPending != null -> pendingHint(currentPending, averageCellArea)
+                    addingLake -> "Кликните по карте, где поставить озеро. Esc — отмена."
+                    addingRiver -> "Кликните по карте, где поставить реку. Esc — отмена."
                     currentDrag != null && !currentDrag.isValid ->
                         "Здесь нельзя: ${currentDrag.problem}. Отпустите, чтобы отменить."
                     currentDrag != null -> "Отпустите, чтобы применить. Esc — отмена."
+                    currentShapeDrag != null -> "Отпустите, чтобы применить. Esc — отмена."
+                    selectedShape is Lake -> "Озеро. Потяните точку, чтобы изменить форму."
+                    selectedShape is River ->
+                        "Река. Потяните точку, чтобы изменить течение. Клик по линии добавляет точку, ПКМ по точке удаляет её."
                     cell == null -> "Кликните по клетке, чтобы выбрать её"
                     else -> "Клетка №${cell.id}, высота ${cell.height}, температура ${cell.temperature}, влажность ${cell.moisture}. Белые точки основные (общие с соседними клетками), " +
                             (if (zoomedIn) "зелёные точки кривой границы. " else "чтобы увидеть точки кривых, приблизьте карту. ") +
                             "Потяните точку, чтобы переместить её."
                 }
-                Text(hint, color = Color.White, modifier = Modifier.background(Color(0x99000000)).padding(4.dp))
-                if (currentPending != null) {
+                Text(hint, color = standardTextColor, modifier = Modifier.background(standardTextBackground).padding(4.dp))
+                val selectedRiver = selectedShape as? River
+                if (selectedRiver != null && prompt == null && currentPending == null && currentDrag == null && currentShapeDrag == null) {
+                    Spacer(Modifier.height(4.dp))
+                    Text(
+                        "Вода в начале: ${selectedRiver.startWater.roundToInt()}",
+                        color = standardTextColor,
+                        modifier = Modifier.background(standardTextBackground).padding(4.dp)
+                    )
+                    Slider(
+                        value = waterToSlider(selectedRiver.startWater),
+                        onValueChange = { editRiverWater(selectedRiver, sliderToWater(it), selectedRiver.endWater) },
+                        onValueChangeFinished = { finishRiverWater(selectedRiver) },
+                        modifier = Modifier.width(220.dp)
+                    )
+                    Text(
+                        "Вода в конце (предел): ${selectedRiver.endWater.roundToInt()}",
+                        color = standardTextColor,
+                        modifier = Modifier.background(standardTextBackground).padding(4.dp)
+                    )
+                    Slider(
+                        value = waterToSlider(selectedRiver.endWater),
+                        onValueChange = { editRiverWater(selectedRiver, selectedRiver.startWater, sliderToWater(it)) },
+                        onValueChangeFinished = { finishRiverWater(selectedRiver) },
+                        modifier = Modifier.width(220.dp)
+                    )
+                }
+                if (prompt != null) {
+                    val question = when {
+                        prompt !in grid.rivers -> "Река удалена. Вернуть клеткам прежний вид?"
+                        prompt.cutPoints == null -> "Новая река. Прорезать по ней клетки?"
+                        else -> "Линия реки изменилась. Перерезать клетки по новой линии?"
+                    }
+                    Spacer(Modifier.height(4.dp))
+                    Text(question, color = standardTextColor, modifier = Modifier.background(standardTextBackground).padding(4.dp))
+                    Row {
+                        Button(onClick = {
+                            val failed = editor.applyRiver(prompt)
+                            riverPrompt = null
+                            if (selectedShape === prompt) selectedShape = null
+                            message = if (failed > 0) "Не все клетки удалось склеить обратно: $failed" else null
+                            focusRequester.requestFocus()
+                        }) { Text("Применить") }
+                        Spacer(Modifier.width(8.dp))
+                        Button(onClick = {
+                            editor.discardRiver(prompt)
+                            riverPrompt = null
+                            if (selectedShape === prompt && prompt !in grid.rivers) selectedShape = null
+                            message = null
+                            focusRequester.requestFocus()
+                        }) { Text("Отменить правки") }
+                    }
+                } else if (currentPending != null) {
                     Spacer(Modifier.height(4.dp))
                     Row {
                         Button(onClick = {
@@ -478,21 +749,34 @@ fun MapView(grid: MapGrid, worldWidth: Float, worldHeight: Float, maxHeight: Int
                         Spacer(Modifier.width(8.dp))
                         Button(onClick = { abortPending(currentPending) }) { Text("Отменить правку (Esc)") }
                     }
-                } else if (currentDrag == null) {
+                } else if (currentDrag == null && currentShapeDrag == null) {
                     Spacer(Modifier.height(4.dp))
                     Row {
                         Button(onClick = { undoEdit() }) { Text("Отменить (Ctrl+Z)") }
                         Spacer(Modifier.width(8.dp))
                         Button(onClick = { redoEdit() }) { Text("Повторить (Ctrl+Y)") }
                     }
+                    Spacer(Modifier.height(4.dp))
+                    Row {
+                        Button(onClick = { addingLake = !addingLake; addingRiver = false; focusRequester.requestFocus() }) {
+                            Text(if (addingLake) "Отмена (Esc)" else "Добавить озеро")
+                        }
+                        Spacer(Modifier.width(8.dp))
+                        Button(enabled = selectedShape != null, onClick = { deleteSelectedShape() }) { Text("Удалить (Delete)") }
+                        Spacer(Modifier.width(8.dp))
+                        Button(onClick = { addingRiver = !addingRiver; addingLake = false; focusRequester.requestFocus() }) {
+                            Text(if (addingRiver) "Отмена (Esc)" else "Добавить реку")
+                        }
+                    }
                 }
             }
             message?.let {
-                Text(it, color = Color(0xFFFF9999), modifier = Modifier.background(Color(0xCC000000)).padding(4.dp))
+                Text(it, color = errorTextColor, modifier = Modifier.background(errorTextBackground).padding(4.dp))
             }
         }
     }
 }
+
 
 private fun pendingHint(pending: PendingEdit, averageCellArea: Float): String {
     val small = pending.smallCell ?: return ""
@@ -546,7 +830,7 @@ private fun DrawScope.drawHandles(cell: Cell, camera: Camera, active: EditDrag?,
         val center = Offset(camera.worldToScreenX(active.currentX, size.width), camera.worldToScreenY(active.currentY, size.height))
         val radius = if (active.isMainPoint) 5f else 3f
         drawCircle(handleBorderColor, radius = radius + 2f, center = center)
-        drawCircle(if (active.isValid) Color(0xFFFFDD44) else invalidColor, radius = radius, center = center)
+        drawCircle(if (active.isValid) Color(0xFFFFDD44) else invalidCellColor, radius = radius, center = center)
     }
 }
 
@@ -563,5 +847,26 @@ private fun DrawScope.drawFallbackTile(cache: TileCache, key: TileKey, destinati
         drawImage(parentImage, IntOffset(sourceX, sourceY),
             IntSize(partSize, partSize), destinationOffset, destinationSize)
         return
+    }
+}
+
+private fun DrawScope.drawShape(shape: PointShape, camera: Camera, path: Path, active: ShapeDrag?) {
+    val originX = camera.centerX - size.width / 2f / camera.scale
+    val originY = camera.centerY + size.height / 2f / camera.scale
+    when (shape) {
+        is Lake -> {
+            addLakePath(path, shape, originX, originY, camera.scale)
+            drawPath(path, Color(0x33FFFFFF))
+        }
+        is River -> addRiverPath(path, shape, originX, originY, camera.scale)
+    }
+    drawPath(path, Color.White, style = Stroke(width = 2f))
+    for (i in 0 until shape.points.size / 2) {
+        val center = Offset(
+            camera.worldToScreenX(shape.points[2 * i], size.width),
+            camera.worldToScreenY(shape.points[2 * i + 1], size.height)
+        )
+        drawCircle(handleBorderColor, radius = 7f, center = center)
+        drawCircle(if (active?.pointIndex == i) Color(0xFFFFDD44) else Color.White, radius = 5f, center = center)
     }
 }

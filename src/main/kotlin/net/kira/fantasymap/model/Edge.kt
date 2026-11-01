@@ -9,6 +9,8 @@ class Edge(
     private var cellA: Cell? = firstCell
     private var cellB: Cell? = null
 
+    var riverWater: Float = 0f
+
     fun otherVertex(vertex: Vertex): Vertex = when {
         vertex === start -> end
         vertex === end -> start

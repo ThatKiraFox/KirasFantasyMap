@@ -48,7 +48,7 @@ fun curveEdges(grid: MapGrid, random: Random) {
     for (cell in grid.cells) cell.updateBounds()
 }
 // Промежуточные точки ломаной от начала ребра до конца, без самих концов.
-private fun curvedPoints(edge: Edge, displacement: Float, random: Random): FloatArray {
+fun curvedPoints(edge: Edge, displacement: Float, random: Random): FloatArray {
     var points = floatArrayOf(edge.start.x, edge.start.y, edge.end.x, edge.end.y)
     repeat(ITERATIONS) {
         val segmentCount = points.size / 2 - 1
