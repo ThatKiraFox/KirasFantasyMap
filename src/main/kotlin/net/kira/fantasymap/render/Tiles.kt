@@ -260,30 +260,30 @@ fun waterColor(cellHeight: Int) =
     lerp(WATER_COLORS[0], WATER_COLORS[1], (cellHeight.toFloat() / -999f).coerceIn(0f, 1f))
 
 fun biomesColor(biome: Biomes): Color = when (biome) {
-    Biomes.TUNDRA -> Color(40, 24, 17, 255)
-    Biomes.STEPPE -> Color(149, 69, 29, 255)
-    Biomes.GRASSLAND -> Color(147, 170, 90, 255)
-    Biomes.SAVANNA -> Color(163, 107, 84, 255)
-    Biomes.DESERT -> Color(182, 160, 120, 255)
-    Biomes.TROPICAL_FOREST -> Color(97, 239, 2, 255)
-    Biomes.TAIGA -> Color(26, 42, 24, 255)
-    Biomes.COLD_STEPPE -> Color(179, 206, 236, 255)
-    Biomes.ICE_DESERT -> Color(142, 231, 214, 255)
-    Biomes.BROADLEAF_FOREST -> Color(2, 57, 20, 255)
-    Biomes.RAINFOREST -> Color(11, 87, 4, 255)
-    Biomes.FOREST_STEPPE -> Color(212, 155, 64, 255)
-    Biomes.MIXED_FOREST -> Color(2, 113, 1, 255)
-    Biomes.SAVANNA_FOREST -> Color(142, 151, 26, 255)
-    Biomes.OCEAN -> Color(10, 19, 47, 255)
-    Biomes.SEA -> Color(22, 37, 76, 255)
-    Biomes.REEF -> Color(30, 31, 71, 255)
-    Biomes.SHALLOWS -> Color(16, 36, 62, 255)
-    Biomes.SWAMP -> Color(17, 36, 12, 255)
-    Biomes.FLOODPLAIN -> Color(102, 222, 150, 255)
-    Biomes.DRIED_LAKEBED -> Color(68, 67, 67, 255)
-    Biomes.OASIS -> Color(88, 158, 125, 255)
-    Biomes.GALLERY_FOREST -> Color(117, 128, 68, 255)
-    Biomes.GLACIER -> Color(189, 243, 235, 255)
+    Biomes.TUNDRA -> tundraColor
+    Biomes.STEPPE -> steppeColor
+    Biomes.GRASSLAND -> grasslandColor
+    Biomes.SAVANNA -> savannaColor
+    Biomes.DESERT -> desertColor
+    Biomes.TROPICAL_FOREST -> tropicalForestColor
+    Biomes.TAIGA -> taigaColor
+    Biomes.COLD_STEPPE -> coldSteppeColor
+    Biomes.ICE_DESERT -> iceDesertColor
+    Biomes.BROADLEAF_FOREST -> broadLeafForestColor
+    Biomes.RAINFOREST -> rainForestColor
+    Biomes.FOREST_STEPPE -> forestSteppeColor
+    Biomes.MIXED_FOREST -> mixedForestColor
+    Biomes.SAVANNA_FOREST -> savannaForestColor
+    Biomes.OCEAN -> oceanColor
+    Biomes.SEA -> seaColor
+    Biomes.REEF -> reefColor
+    Biomes.SHALLOWS -> shallowsColor
+    Biomes.SWAMP -> swampColor
+    Biomes.FLOODPLAIN -> floodplainColor
+    Biomes.DRIED_LAKEBED -> driedLakebedColor
+    Biomes.OASIS -> oasisColor
+    Biomes.GALLERY_FOREST -> galleryForestColor
+    Biomes.GLACIER -> glacierColor
 }
 
 fun moistureColor(moisture: Float): Color =
