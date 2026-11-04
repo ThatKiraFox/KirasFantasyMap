@@ -13,11 +13,12 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import net.kira.fantasymap.generation.hydrology.RIVER_THRESHOLD
 import net.kira.fantasymap.generation.hydrology.riverWidth
-import net.kira.fantasymap.model.Cell
-import net.kira.fantasymap.model.CellIndex
-import net.kira.fantasymap.model.PointShape.Lake
-import net.kira.fantasymap.model.MapGrid
-import net.kira.fantasymap.model.PointShape.River
+import net.kira.fantasymap.model.Biomes
+import net.kira.fantasymap.model.mapgrid.Cell
+import net.kira.fantasymap.model.mapgrid.CellIndex
+import net.kira.fantasymap.model.mapgrid.MapGrid
+import net.kira.fantasymap.model.pointshape.Lake
+import net.kira.fantasymap.model.pointshape.River
 import java.util.concurrent.locks.ReentrantReadWriteLock
 import kotlin.concurrent.read
 import kotlin.concurrent.write
@@ -60,6 +61,17 @@ class TileCache(
     private val outdated = HashSet<TileKey>()                      // плитки, которые правка задела, пока они рисовались
     private val gridLock = ReentrantReadWriteLock()
 
+    @Volatile var layers: Set<LAYERS> = setOf(LAYERS.LAKES, LAYERS.RIVERS)
+        private set
+
+    fun setLayers(value: Set<LAYERS>, level: Int, minX: Float, minY: Float, maxX: Float, maxY: Float) {
+        layers = value
+        for (key in tiles.keys.toList() + pinnedTiles.keys) {
+            if (key.level == level && touches(key, minX, minY, maxX, maxY)) request(key, force = true)
+            else { tiles.remove(key); pinnedTiles.remove(key) }
+        }
+        for (key in pending.toList()) outdated.add(key)       // то, что уже рисуется со старыми слоями, дорисуем заново
+    }
 
     // Нижние уровни заказываем после видимых плиток, чтобы они не отнимали у них ядра.
     fun prerenderLowLevels() {
@@ -98,15 +110,9 @@ class TileCache(
             return
         }
         scope.launch {
+            val currentLayers = layers
             val bitmap = withContext(Dispatchers.Default) {
-                gridLock.read {
-                    val start = System.currentTimeMillis()
-                    try {
-                        renderTile(grid, cellIndex, key, worldWidth, worldHeight, maxHeight)
-                    } finally {
-                        println("tile $key: ${System.currentTimeMillis() - start} ms")
-                    }
-                }
+                gridLock.read { renderTile(grid, cellIndex, key, worldWidth, worldHeight, maxHeight, currentLayers) }
             }
             if (key.level <= PINNED_LEVELS) pinnedTiles[key] = bitmap else tiles[key] = bitmap
             pending.remove(key)
@@ -124,7 +130,7 @@ class TileCache(
     fun <T> editingGrid(action: () -> T): T = gridLock.write(action)
 }
 
-fun renderTile(grid: MapGrid, cellIndex: CellIndex, key: TileKey, worldWidth: Float, worldHeight: Float, maxHeight: Int): ImageBitmap {
+fun renderTile(grid: MapGrid, cellIndex: CellIndex, key: TileKey, worldWidth: Float, worldHeight: Float, maxHeight: Int, layers: Set<LAYERS>): ImageBitmap {
     val pixelsPerWorldUnit = pixelsPerUnit(key.level)
     val tileWorldSize = TILE_SIZE / pixelsPerWorldUnit
     val minX = key.column * tileWorldSize
@@ -155,11 +161,17 @@ fun renderTile(grid: MapGrid, cellIndex: CellIndex, key: TileKey, worldWidth: Fl
                 else path.lineTo(pixelX, pixelY)
             }
             path.close()
-            val color = cellColor(cell.height, maxHeight)
+            val color = when {
+                cell.height <= 0 && LAYERS.BIOMES !in layers -> waterColor(cell.height)           // море всегда
+                LAYERS.BIOMES in layers -> biomesColor(cell.biome!!)                   // когда появятся биомы
+                LAYERS.MOISTURE in layers -> moistureColor(cell.moisture)
+                LAYERS.HEIGHT in layers -> heightColor(cell.height, maxHeight)
+                else -> Color.White                                             // pure landmass
+            }
             drawPath(path, color)
-            drawPath(path, color, style = seamStroke)                // обводка того же цвета закрывает швы между клетками
+            drawPath(path, if (LAYERS.CELLS in layers) Color.Black else color, style = seamStroke)
         }
-        for (lake in grid.lakes) {
+        if (LAYERS.LAKES in layers) for (lake in grid.lakes) {
             if (lake.maxX < minX || lake.minX > maxX || lake.maxY < minY || lake.minY > maxY) continue
             addLakePath(path, lake, minX, maxY, pixelsPerWorldUnit)
             drawPath(path, riverColor)
@@ -182,7 +194,7 @@ fun renderTile(grid: MapGrid, cellIndex: CellIndex, key: TileKey, worldWidth: Fl
                 )
             }
         }
-        for (river in grid.rivers) {
+        if (LAYERS.RIVERS in layers) for (river in grid.rivers) {
             val margin = river.margin
             if (river.maxX + margin < minX || river.minX - margin > maxX || river.maxY + margin < minY || river.minY - margin > maxY) continue
             if (margin * pixelsPerWorldUnit < THIN_RIVER_PIXELS) {
@@ -221,7 +233,7 @@ fun addLakePath(path: Path, lake: Lake, originX: Float, originY: Float, scale: F
     path.reset()
     path.moveTo((pixelX(count - 1) + pixelX(0)) / 2f, (pixelY(count - 1) + pixelY(0)) / 2f)
     for (i in 0 until count) {
-        path.quadraticBezierTo(pixelX(i), pixelY(i), (pixelX(i) + pixelX(i + 1)) / 2f, (pixelY(i) + pixelY(i + 1)) / 2f)
+        path.quadraticTo(pixelX(i), pixelY(i), (pixelX(i) + pixelX(i + 1)) / 2f, (pixelY(i) + pixelY(i + 1)) / 2f)
     }
     path.close()
 }
@@ -235,21 +247,48 @@ fun addRiverPath(path: Path, river: River, originX: Float, originY: Float, scale
     }
 }
 
-fun cellColor(cellHeight: Int, maxHeight: Int): Color =
-    if (cellHeight <= 0) {
-        val fraction = (cellHeight.toFloat() / -999f).coerceIn(0f, 1f)
-        return lerp(WATER_COLORS[0], WATER_COLORS[1], fraction)
-    }
+fun heightColor(cellHeight: Int, maxHeight: Int): Color {
+    val colors = GROUND_COLORS
+    val fraction = (cellHeight.toFloat() / maxHeight.toFloat()).coerceIn(0f, 1f)
+    val scaled = fraction * (colors.size - 1)
+    val index = scaled.toInt().coerceAtMost(colors.size - 2)
+    val localT = scaled - index
+    return lerp(colors[index], colors[index + 1], localT)
+}
 
-    else {
-        val colors = GROUND_COLORS
-        val fraction = (cellHeight.toFloat() / maxHeight.toFloat()).coerceIn(0f, 1f)
-        val scaled = fraction * (colors.size - 1)
-        val index = scaled.toInt().coerceAtMost(colors.size - 2)
-        val localT = scaled - index
+fun waterColor(cellHeight: Int) =
+    lerp(WATER_COLORS[0], WATER_COLORS[1], (cellHeight.toFloat() / -999f).coerceIn(0f, 1f))
 
-        return lerp(colors[index], colors[index + 1], localT)
-    }
+fun biomesColor(biome: Biomes): Color = when (biome) {
+    Biomes.TUNDRA -> Color(40, 24, 17, 255)
+    Biomes.STEPPE -> Color(149, 69, 29, 255)
+    Biomes.GRASSLAND -> Color(147, 170, 90, 255)
+    Biomes.SAVANNA -> Color(163, 107, 84, 255)
+    Biomes.DESERT -> Color(182, 160, 120, 255)
+    Biomes.TROPICAL_FOREST -> Color(97, 239, 2, 255)
+    Biomes.TAIGA -> Color(26, 42, 24, 255)
+    Biomes.COLD_STEPPE -> Color(179, 206, 236, 255)
+    Biomes.ICE_DESERT -> Color(142, 231, 214, 255)
+    Biomes.BROADLEAF_FOREST -> Color(2, 57, 20, 255)
+    Biomes.RAINFOREST -> Color(11, 87, 4, 255)
+    Biomes.FOREST_STEPPE -> Color(212, 155, 64, 255)
+    Biomes.MIXED_FOREST -> Color(2, 113, 1, 255)
+    Biomes.SAVANNA_FOREST -> Color(142, 151, 26, 255)
+    Biomes.OCEAN -> Color(10, 19, 47, 255)
+    Biomes.SEA -> Color(22, 37, 76, 255)
+    Biomes.REEF -> Color(30, 31, 71, 255)
+    Biomes.SHALLOWS -> Color(16, 36, 62, 255)
+    Biomes.SWAMP -> Color(17, 36, 12, 255)
+    Biomes.FLOODPLAIN -> Color(102, 222, 150, 255)
+    Biomes.DRIED_LAKEBED -> Color(68, 67, 67, 255)
+    Biomes.OASIS -> Color(88, 158, 125, 255)
+    Biomes.GALLERY_FOREST -> Color(117, 128, 68, 255)
+    Biomes.GLACIER -> Color(189, 243, 235, 255)
+}
+
+fun moistureColor(moisture: Float): Color =
+    lerp(Color.Red, Color.Green, ((moisture - 0.05f) / 0.95f).coerceIn(0f, 1f))
+
 
 fun testColor(cellValue: Float, cellHeight: Int): Color =
     if (cellHeight < 0) {Color.Black}

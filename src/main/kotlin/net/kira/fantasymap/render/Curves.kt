@@ -1,9 +1,9 @@
 package net.kira.fantasymap.render
 
 import net.kira.fantasymap.generation.CellValidator
-import net.kira.fantasymap.model.Cell
-import net.kira.fantasymap.model.Edge
-import net.kira.fantasymap.model.MapGrid
+import net.kira.fantasymap.model.mapgrid.Cell
+import net.kira.fantasymap.model.mapgrid.Edge
+import net.kira.fantasymap.model.mapgrid.MapGrid
 import kotlin.math.sqrt
 import kotlin.random.Random
 

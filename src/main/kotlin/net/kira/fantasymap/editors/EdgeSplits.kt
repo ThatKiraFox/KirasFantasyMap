@@ -1,8 +1,8 @@
-package net.kira.fantasymap.generation
+package net.kira.fantasymap.editors
 
-import net.kira.fantasymap.model.Edge
-import net.kira.fantasymap.model.MapGrid
-import net.kira.fantasymap.model.Vertex
+import net.kira.fantasymap.model.mapgrid.Edge
+import net.kira.fantasymap.model.mapgrid.MapGrid
+import net.kira.fantasymap.model.mapgrid.Vertex
 
 class EdgeSplit(val vertex: Vertex, val first: Edge, val second: Edge)   // first: от начала до вершины, second: от вершины до конца
 

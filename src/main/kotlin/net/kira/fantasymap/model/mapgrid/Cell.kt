@@ -1,5 +1,6 @@
-package net.kira.fantasymap.model
+package net.kira.fantasymap.model.mapgrid
 
+import net.kira.fantasymap.model.Biomes
 import kotlin.math.abs
 
 class Cell(val id: Int) {
@@ -27,6 +28,8 @@ class Cell(val id: Int) {
     var water: Float = 0f
     var flowsTo: Cell? = null
     var isLake: Boolean = false
+    var biome: Biomes? = null
+    var depth: Int = 0
 
     var isRemoved = false
 

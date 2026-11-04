@@ -1,7 +1,7 @@
-package net.kira.fantasymap.generation
+package net.kira.fantasymap.generation.general
 
 import net.kira.fantasymap.imported.FastNoiseLite
-import net.kira.fantasymap.model.MapGrid
+import net.kira.fantasymap.model.mapgrid.MapGrid
 import kotlin.math.max
 
 private const val MIN_HEIGHT = -999
@@ -29,6 +29,7 @@ fun assignHeights(grid: MapGrid, worldWidth: Float, worldHeight: Float, seed: Lo
     for (cell in grid.cells) {
         cell.height = (cell.height - threshold).coerceIn(MIN_HEIGHT, maxHeight)
     }
-
+    val h = grid.cells.filter { !it.isRemoved && it.height > 0 }.map { it.height }.sorted()
+    println("land height: p10 ${h[h.size / 10]}, p50 ${h[h.size / 2]}, p90 ${h[h.size * 9 / 10]}")
 
 }

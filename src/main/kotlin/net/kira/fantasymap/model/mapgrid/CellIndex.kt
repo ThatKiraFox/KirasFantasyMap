@@ -1,4 +1,4 @@
-package net.kira.fantasymap.model
+package net.kira.fantasymap.model.mapgrid
 
 import kotlin.math.ceil
 import kotlin.math.floor

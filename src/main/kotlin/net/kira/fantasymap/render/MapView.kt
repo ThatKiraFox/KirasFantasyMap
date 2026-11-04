@@ -1,7 +1,7 @@
 package net.kira.fantasymap.render
 
-import net.kira.fantasymap.generation.ShapeDrag
-import net.kira.fantasymap.generation.ShapeEditor
+import net.kira.fantasymap.editors.ShapeDrag
+import net.kira.fantasymap.editors.ShapeEditor
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.focusable
@@ -12,6 +12,7 @@ import androidx.compose.material.Button
 import androidx.compose.material.Slider
 import androidx.compose.material.Text
 import androidx.compose.runtime.*
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.focus.FocusRequester
@@ -32,11 +33,19 @@ import androidx.compose.ui.unit.IntSize
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 import net.kira.fantasymap.Camera
-import net.kira.fantasymap.generation.*
-import net.kira.fantasymap.model.*
-import net.kira.fantasymap.model.PointShape.Lake
-import net.kira.fantasymap.model.PointShape.PointShape
-import net.kira.fantasymap.model.PointShape.River
+import net.kira.fantasymap.editors.EditDrag
+import net.kira.fantasymap.editors.FinishResult
+import net.kira.fantasymap.editors.Handle
+import net.kira.fantasymap.editors.PendingEdit
+import net.kira.fantasymap.editors.VertexEditor
+import net.kira.fantasymap.model.pointshape.Lake
+import net.kira.fantasymap.model.pointshape.PointShape
+import net.kira.fantasymap.model.pointshape.River
+import net.kira.fantasymap.model.mapgrid.Cell
+import net.kira.fantasymap.model.mapgrid.CellIndex
+import net.kira.fantasymap.model.mapgrid.Edge
+import net.kira.fantasymap.model.mapgrid.MapGrid
+import net.kira.fantasymap.model.mapgrid.Vertex
 import kotlin.math.floor
 import kotlin.math.ln
 import kotlin.math.pow
@@ -99,6 +108,8 @@ fun MapView(grid: MapGrid, worldWidth: Float, worldHeight: Float, maxHeight: Int
     var shapeDrag by remember { mutableStateOf<ShapeDrag?>(null) }
     var riverPrompt by remember { mutableStateOf<River?>(null) }    // река, по которой ждём решение: применить или отменить
     var waterEdit by remember { mutableStateOf<Pair<Float, Float>?>(null) }
+    var layers by remember { mutableStateOf(tileCache.layers) }
+    var layersOpen by remember { mutableStateOf(false) }
 
     fun worldX(screenX: Float) = camera.screenToWorldX(screenX, canvasSize.width.toFloat())
     fun worldY(screenY: Float) = camera.screenToWorldY(screenY, canvasSize.height.toFloat())
@@ -644,14 +655,44 @@ fun MapView(grid: MapGrid, worldWidth: Float, worldHeight: Float, maxHeight: Int
             }
             selectedShape?.let { drawShape(it, camera, outlinePath, shapeDrag) }
         }
-
         Column(Modifier.padding(8.dp)) {
+            Button(onClick = {
+                layersOpen = !layersOpen
+                focusRequester.requestFocus()
+            }) { Text(if (layersOpen) "Слои ▲" else "Слои ▼") }
+
+            if (layersOpen) {
+                for (row in LAYERS.values().toList().chunked(3)) {
+                    Row {
+                        for (layer in row) {
+                            Button(onClick = {
+                                layers = if (layer in layers) layers - layer else layers + layer
+                                val halfWidth = canvasSize.width / 2f / camera.scale
+                                val halfHeight = canvasSize.height / 2f / camera.scale
+                                tileCache.setLayers(
+                                    layers, levelForScale(camera.scale),
+                                    camera.centerX - halfWidth, camera.centerY - halfHeight,
+                                    camera.centerX + halfWidth, camera.centerY + halfHeight
+                                )
+                                focusRequester.requestFocus()
+                            }) { Text((if (layer in layers) "✓ " else "") + layer.name) }
+                            Spacer(Modifier.width(4.dp))
+                        }
+                    }
+                }
+            }
+        }
+        Column(
+            Modifier.align(Alignment.TopEnd).padding(8.dp).widthIn(max = 560.dp),
+            horizontalAlignment = Alignment.End
+        ) {
             Text(
                 "FPS: $fps   tiles: $shownTiles, waiting: $shownWaiting",
                 color = standardTextColor,
                 modifier = Modifier.background(standardTextBackground).padding(4.dp)
             )
             Spacer(Modifier.height(4.dp))
+
             Button(onClick = {
                 if (drag == null && shapeDrag == null && pending == null && riverPrompt == null) setEditMode(!editMode)
                 focusRequester.requestFocus()

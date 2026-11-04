@@ -1,6 +1,6 @@
-package net.kira.fantasymap.generation
+package net.kira.fantasymap.generation.general
 
-import net.kira.fantasymap.model.MapGrid
+import net.kira.fantasymap.model.mapgrid.MapGrid
 import java.lang.Math.toRadians
 import kotlin.math.abs
 import kotlin.math.cos

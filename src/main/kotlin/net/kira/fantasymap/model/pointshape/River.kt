@@ -1,9 +1,8 @@
-package net.kira.fantasymap.model.PointShape
+package net.kira.fantasymap.model.pointshape
 
 import net.kira.fantasymap.generation.hydrology.riverWidth
-import net.kira.fantasymap.model.Edge
-import net.kira.fantasymap.model.Vertex
-import kotlin.compareTo
+import net.kira.fantasymap.model.mapgrid.Edge
+import net.kira.fantasymap.model.mapgrid.Vertex
 import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.hypot

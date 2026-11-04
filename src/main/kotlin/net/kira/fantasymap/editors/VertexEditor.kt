@@ -1,10 +1,18 @@
-package net.kira.fantasymap.generation
+package net.kira.fantasymap.editors
 
+import net.kira.fantasymap.generation.CellValidator
+import net.kira.fantasymap.generation.hydrology.cutAlongRiver
+import net.kira.fantasymap.generation.hydrology.uncutRiver
 import net.kira.fantasymap.generation.hydrology.updateRiverProfiles
-import net.kira.fantasymap.model.*
-import net.kira.fantasymap.model.PointShape.Lake
-import net.kira.fantasymap.model.PointShape.PointShape
-import net.kira.fantasymap.model.PointShape.River
+import net.kira.fantasymap.generation.segmentsCross
+import net.kira.fantasymap.model.pointshape.Lake
+import net.kira.fantasymap.model.pointshape.PointShape
+import net.kira.fantasymap.model.pointshape.River
+import net.kira.fantasymap.model.mapgrid.Cell
+import net.kira.fantasymap.model.mapgrid.CellIndex
+import net.kira.fantasymap.model.mapgrid.Edge
+import net.kira.fantasymap.model.mapgrid.MapGrid
+import net.kira.fantasymap.model.mapgrid.Vertex
 import net.kira.fantasymap.render.TileCache
 import kotlin.math.sqrt
 
@@ -524,7 +532,7 @@ class VertexEditor(
         for (edge in small.edges) {
             for (neighbor in edge.cells) {
                 if (neighbor === small || neighbor.isRemoved || neighbor in plans) continue
-                MergeCells.plan(small, neighbor)?.let { plans[neighbor] = it }
+                MergeCells.Companion.plan(small, neighbor)?.let { plans[neighbor] = it }
             }
         }
         return plans

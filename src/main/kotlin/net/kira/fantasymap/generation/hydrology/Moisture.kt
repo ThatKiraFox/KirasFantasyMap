@@ -1,7 +1,7 @@
 package net.kira.fantasymap.generation.hydrology
 
 import net.kira.fantasymap.imported.FastNoiseLite
-import net.kira.fantasymap.model.MapGrid
+import net.kira.fantasymap.model.mapgrid.MapGrid
 import kotlin.math.abs
 import kotlin.math.cos
 import kotlin.math.exp

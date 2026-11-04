@@ -1,10 +1,10 @@
-package net.kira.fantasymap.generation
+package net.kira.fantasymap.editors
 
-import net.kira.fantasymap.model.Cell
-import net.kira.fantasymap.model.CellIndex
-import net.kira.fantasymap.model.Edge
-import net.kira.fantasymap.model.MapGrid
-import net.kira.fantasymap.model.Vertex
+import net.kira.fantasymap.model.mapgrid.Cell
+import net.kira.fantasymap.model.mapgrid.CellIndex
+import net.kira.fantasymap.model.mapgrid.Edge
+import net.kira.fantasymap.model.mapgrid.MapGrid
+import net.kira.fantasymap.model.mapgrid.Vertex
 
 // Объединение маленькой клетки с соседом. Обратимо: apply и revert возвращают сетку в то же состояние.
 class MergeCells private constructor(

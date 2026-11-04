@@ -1,4 +1,4 @@
-package net.kira.fantasymap.generation
+package net.kira.fantasymap.generation.general
 
 import io.ygdrasil.delaunator.Delaunator
 import io.ygdrasil.delaunator.domain.Point
@@ -7,8 +7,9 @@ import net.kira.fantasymap.generation.hydrology.assignMoisture
 import net.kira.fantasymap.generation.hydrology.assignRivers
 import net.kira.fantasymap.generation.hydrology.createLakes
 import net.kira.fantasymap.generation.hydrology.createRivers
-import net.kira.fantasymap.model.MapGrid
-import net.kira.fantasymap.model.Vertex
+import net.kira.fantasymap.generation.hydrology.cutRivers
+import net.kira.fantasymap.model.mapgrid.MapGrid
+import net.kira.fantasymap.model.mapgrid.Vertex
 import net.kira.fantasymap.render.curveEdges
 import net.kira.fantasymap.util.timed
 import kotlin.math.ceil
@@ -37,6 +38,7 @@ fun generateMap(worldWidth: Float, worldHeight: Float, cellCount: Int, seed: Lon
     val steps = timed("cutRivers") { cutRivers(grid, order, worldWidth, worldHeight, Random(seed + 4)) }
     timed("createLakes") { createLakes(grid) }
     timed("createRivers") { createRivers(grid, order, steps) }
+    timed("assignZonalBiomes") { assignZonalBiome(grid) }
     println("edges with NaN: ${grid.edges.count { e -> e.points.any { it.isNaN() } }}")
     println("zero-length edges: ${grid.edges.count { it.start.x == it.end.x && it.start.y == it.end.y }}")
     return grid

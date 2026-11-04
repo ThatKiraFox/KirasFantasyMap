@@ -1,13 +1,14 @@
 package net.kira.fantasymap.generation.hydrology
 
-import net.kira.fantasymap.model.Cell
-import net.kira.fantasymap.model.MapGrid
+import net.kira.fantasymap.model.mapgrid.Cell
+import net.kira.fantasymap.model.mapgrid.MapGrid
 import java.util.PriorityQueue
 import kotlin.math.ln
 import kotlin.math.max
 
 private const val SNOW = 1f                    // сколько воды даёт снег на самой высокой точке (если холодно)
 const val RIVER_THRESHOLD = 50f                // с какого количества воды клетка считается рекой
+
 
 // Возвращает клетки в порядке обхода от океана вглубь суши: у каждой клетки её flowsTo стоит раньше неё.
 fun assignRivers(grid: MapGrid, maxHeight: Int): List<Cell> {
@@ -44,15 +45,18 @@ fun assignRivers(grid: MapGrid, maxHeight: Int): List<Cell> {
             queue.add(other)
         }
     }
+    for (cell in grid.cells) cell.depth = (level[cell.id] - cell.height)
 
     // С конца: сначала клетки выше по течению, потом те, куда они втекают.
-    for (cell in order.asReversed()) cell.flowsTo?.let { it.water += cell.water }
+    for (cell in order.asReversed()) cell.flowsTo?.let {
+        it.water += cell.water }
     println("river cells: ${land.count { it.water >= RIVER_THRESHOLD }}")
+
     return order
 }
 
 // Океан: самая большая связная вода. Остальные воды внутренние моря.
-private fun findOcean(grid: MapGrid): BooleanArray {
+fun findOcean(grid: MapGrid): BooleanArray {
     val seen = BooleanArray(grid.cells.size)
     var biggest = ArrayList<Cell>()
     for (start in grid.cells) {

@@ -1,8 +1,8 @@
 package net.kira.fantasymap.generation.hydrology
 
-import net.kira.fantasymap.model.Cell
-import net.kira.fantasymap.model.PointShape.Lake
-import net.kira.fantasymap.model.MapGrid
+import net.kira.fantasymap.model.mapgrid.Cell
+import net.kira.fantasymap.model.pointshape.Lake
+import net.kira.fantasymap.model.mapgrid.MapGrid
 import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.atan2

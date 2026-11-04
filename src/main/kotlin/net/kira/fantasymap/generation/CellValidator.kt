@@ -1,6 +1,6 @@
 package net.kira.fantasymap.generation
 
-import net.kira.fantasymap.model.Cell
+import net.kira.fantasymap.model.mapgrid.Cell
 
 fun orientation(ax: Float, ay: Float, bx: Float, by: Float, cx: Float, cy: Float): Float =
     (bx - ax) * (cy - ay) - (by - ay) * (cx - ax)

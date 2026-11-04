@@ -1,11 +1,16 @@
-package net.kira.fantasymap.generation
+package net.kira.fantasymap.generation.hydrology
 
-import net.kira.fantasymap.model.Cell
-import net.kira.fantasymap.model.CellIndex
-import net.kira.fantasymap.model.Edge
-import net.kira.fantasymap.model.MapGrid
-import net.kira.fantasymap.model.PointShape.River
-import net.kira.fantasymap.model.Vertex
+import net.kira.fantasymap.generation.CellValidator
+import net.kira.fantasymap.editors.MergeCells
+import net.kira.fantasymap.generation.segmentsCross
+import net.kira.fantasymap.editors.splitEdge
+import net.kira.fantasymap.editors.unsplitVertex
+import net.kira.fantasymap.model.mapgrid.Cell
+import net.kira.fantasymap.model.mapgrid.CellIndex
+import net.kira.fantasymap.model.mapgrid.Edge
+import net.kira.fantasymap.model.mapgrid.MapGrid
+import net.kira.fantasymap.model.pointshape.River
+import net.kira.fantasymap.model.mapgrid.Vertex
 import kotlin.math.abs
 import kotlin.math.ceil
 import kotlin.math.floor
@@ -107,7 +112,7 @@ fun uncutRiver(grid: MapGrid, index: CellIndex, river: River): Int {
         if (cells.size < 2 || cells.any { it.isRemoved } || cells.any { c -> c.edges.none { it === edge } }) continue
         val target = cells.minByOrNull { it.id }!!
         val small = cells.first { it !== target }
-        val plan = MergeCells.plan(small, target)
+        val plan = MergeCells.Companion.plan(small, target)
         if (plan == null) {
             failed++
             continue
@@ -238,6 +243,8 @@ private fun splitCell(grid: MapGrid, index: CellIndex, cell: Cell, a: Vertex, b:
     other.water = cell.water
     other.flowsTo = cell.flowsTo
     other.isLake = cell.isLake
+    other.biome = cell.biome
+    other.depth = cell.depth
     other.updateLatitude(cell.latitude)
     grid.cells.add(other)
 

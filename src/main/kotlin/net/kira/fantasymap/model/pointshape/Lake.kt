@@ -1,6 +1,4 @@
-package net.kira.fantasymap.model.PointShape
-
-import kotlin.compareTo
+package net.kira.fantasymap.model.pointshape
 
 class Lake(points: FloatArray) : PointShape(points) {
     // Внутри ли точка (по ломаной из точек, для клика достаточно).

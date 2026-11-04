@@ -1,15 +1,15 @@
-package net.kira.fantasymap.model
+package net.kira.fantasymap.model.mapgrid
 
-import net.kira.fantasymap.model.PointShape.Lake
-import net.kira.fantasymap.model.PointShape.River
-import kotlin.random.Random
+import net.kira.fantasymap.model.pointshape.Lake
+import net.kira.fantasymap.model.pointshape.River
+import java.util.concurrent.CopyOnWriteArrayList
 
 class MapGrid {
     val vertices = ArrayList<Vertex>()
     val edges = ArrayList<Edge>()
     val cells = ArrayList<Cell>()
-    val lakes = java.util.concurrent.CopyOnWriteArrayList<Lake>()
-    val rivers = java.util.concurrent.CopyOnWriteArrayList<River>()
+    val lakes = CopyOnWriteArrayList<Lake>()
+    val rivers = CopyOnWriteArrayList<River>()
 
     fun addVertex(x: Float, y: Float): Vertex = Vertex(x, y).also { vertices.add(it) }
 

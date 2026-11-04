@@ -3,7 +3,7 @@ package net.kira.fantasymap
 import net.kira.fantasymap.render.MapView
 import androidx.compose.ui.window.Window
 import androidx.compose.ui.window.application
-import net.kira.fantasymap.generation.generateMap
+import net.kira.fantasymap.generation.general.generateMap
 
 fun main() {
     val start = System.currentTimeMillis()

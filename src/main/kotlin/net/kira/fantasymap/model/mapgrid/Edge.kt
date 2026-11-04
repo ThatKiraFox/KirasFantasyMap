@@ -1,4 +1,7 @@
-package net.kira.fantasymap.model
+package net.kira.fantasymap.model.mapgrid
+
+import net.kira.fantasymap.model.mapgrid.Cell
+import net.kira.fantasymap.model.mapgrid.Vertex
 
 class Edge(
     val start: Vertex,

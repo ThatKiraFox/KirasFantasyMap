@@ -1,6 +1,6 @@
-package net.kira.fantasymap.generation
+package net.kira.fantasymap.generation.general
 
-import net.kira.fantasymap.model.MapGrid
+import net.kira.fantasymap.model.mapgrid.MapGrid
 
 private const val MAX_LATITUDE_DEGREES = 90
 

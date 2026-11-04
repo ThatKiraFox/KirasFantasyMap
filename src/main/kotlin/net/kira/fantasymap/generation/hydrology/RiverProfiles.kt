@@ -1,7 +1,7 @@
 package net.kira.fantasymap.generation.hydrology
 
-import net.kira.fantasymap.model.PointShape.River
-import net.kira.fantasymap.model.PointShape.WaterProfile
+import net.kira.fantasymap.model.pointshape.River
+import net.kira.fantasymap.model.pointshape.WaterProfile
 import kotlin.math.hypot
 
 private const val JOIN_TOLERANCE = 0.5f      // в единицах мира: так близко к чужой линии должен быть конец реки, чтобы она считалась притоком

@@ -1,10 +1,9 @@
 package net.kira.fantasymap.generation.hydrology
 
-import net.kira.fantasymap.generation.RiverStep
-import net.kira.fantasymap.model.Cell
-import net.kira.fantasymap.model.Edge
-import net.kira.fantasymap.model.MapGrid
-import net.kira.fantasymap.model.PointShape.River
+import net.kira.fantasymap.model.mapgrid.Cell
+import net.kira.fantasymap.model.mapgrid.Edge
+import net.kira.fantasymap.model.mapgrid.MapGrid
+import net.kira.fantasymap.model.pointshape.River
 import kotlin.collections.first
 
 fun createRivers(grid: MapGrid, order: List<Cell>, steps: Map<Cell, RiverStep>) {

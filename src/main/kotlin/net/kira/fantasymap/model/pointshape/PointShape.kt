@@ -1,4 +1,4 @@
-package net.kira.fantasymap.model.PointShape
+package net.kira.fantasymap.model.pointshape
 
 sealed class PointShape(initialPoints: FloatArray) {
     var points: FloatArray = initialPoints

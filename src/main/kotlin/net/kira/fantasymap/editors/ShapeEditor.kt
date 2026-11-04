@@ -1,9 +1,9 @@
-package net.kira.fantasymap.generation
+package net.kira.fantasymap.editors
 
-import net.kira.fantasymap.model.MapGrid
-import net.kira.fantasymap.model.PointShape.Lake
-import net.kira.fantasymap.model.PointShape.PointShape
-import net.kira.fantasymap.model.PointShape.River
+import net.kira.fantasymap.model.mapgrid.MapGrid
+import net.kira.fantasymap.model.pointshape.Lake
+import net.kira.fantasymap.model.pointshape.PointShape
+import net.kira.fantasymap.model.pointshape.River
 import net.kira.fantasymap.render.TileCache
 import kotlin.math.PI
 import kotlin.math.cos

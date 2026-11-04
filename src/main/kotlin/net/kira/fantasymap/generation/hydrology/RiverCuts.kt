@@ -1,17 +1,17 @@
-package net.kira.fantasymap.generation
+package net.kira.fantasymap.generation.hydrology
 
-import net.kira.fantasymap.generation.hydrology.RIVER_THRESHOLD
-import net.kira.fantasymap.model.Cell
-import net.kira.fantasymap.model.CellIndex
-import net.kira.fantasymap.model.Edge
-import net.kira.fantasymap.model.MapGrid
-import net.kira.fantasymap.model.Vertex
+import net.kira.fantasymap.generation.CellValidator
+import net.kira.fantasymap.editors.MergeCells
+import net.kira.fantasymap.model.mapgrid.Cell
+import net.kira.fantasymap.model.mapgrid.CellIndex
+import net.kira.fantasymap.model.mapgrid.Edge
+import net.kira.fantasymap.model.mapgrid.MapGrid
+import net.kira.fantasymap.model.mapgrid.Vertex
 import net.kira.fantasymap.render.curvedPoints
 import kotlin.math.abs
 import kotlin.math.hypot
 import kotlin.math.sqrt
 import kotlin.random.Random
-import kotlin.text.get
 
 private const val MIN_AREA_FACTOR = 0.2f        // как в редакторе
 private const val AREA_TOLERANCE = 0.001f       // доля площади исходной клетки: на сколько может разойтись сумма площадей половинок
@@ -78,7 +78,7 @@ fun cutRivers(grid: MapGrid, order: List<Cell>, worldWidth: Float, worldHeight: 
     for (piece in pieces.values.filter { it.size > 1 }.flatten()) {
         if (piece.isRemoved || piece.area() >= minArea) continue
         for (target in mergeCandidates(piece)) {
-            val plan = MergeCells.plan(piece, target) ?: continue
+            val plan = MergeCells.Companion.plan(piece, target) ?: continue
             plan.apply(grid, index)
             merged++
             break
@@ -117,6 +117,8 @@ private fun cutCell(grid: MapGrid, cell: Cell, a: Vertex, b: Vertex, water: Floa
     other.water = cell.water
     other.flowsTo = cell.flowsTo
     other.isLake = cell.isLake
+    other.biome = cell.biome
+    other.depth = cell.depth
     other.updateLatitude(cell.latitude)
     grid.cells.add(other)
 
