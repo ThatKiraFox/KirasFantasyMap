@@ -2,15 +2,12 @@ package net.kira.fantasymap.generation.general
 
 import io.ygdrasil.delaunator.Delaunator
 import io.ygdrasil.delaunator.domain.Point
-import net.kira.fantasymap.generation.hydrology.assignLakes
-import net.kira.fantasymap.generation.hydrology.assignMoisture
-import net.kira.fantasymap.generation.hydrology.assignRivers
-import net.kira.fantasymap.generation.hydrology.createLakes
-import net.kira.fantasymap.generation.hydrology.createRivers
-import net.kira.fantasymap.generation.hydrology.cutRivers
+import net.kira.fantasymap.generation.GenerationStep
+import net.kira.fantasymap.generation.hydrology.RiverStep
+import net.kira.fantasymap.generation.loadingString
+import net.kira.fantasymap.model.mapgrid.Cell
 import net.kira.fantasymap.model.mapgrid.MapGrid
 import net.kira.fantasymap.model.mapgrid.Vertex
-import net.kira.fantasymap.render.curveEdges
 import net.kira.fantasymap.util.timed
 import kotlin.math.ceil
 import kotlin.math.sqrt
@@ -23,22 +20,42 @@ class Triangulation(val triangles: IntArray, val halfedges: IntArray)
 
 private const val JITTER = 0.8
 
-fun generateMap(worldWidth: Float, worldHeight: Float, cellCount: Int, seed: Long, maxHeight: Int, fraction: Float): MapGrid {
-    val random = Random(seed)
-    println("Generations steps:")
-    val sites = timed("generateSites") { generateSites(worldWidth, worldHeight, cellCount, random) }
-    val grid = timed("buildGrid") { buildGrid(sites, triangulate(sites), worldWidth, worldHeight) }
-    timed("curveEdges") { curveEdges(grid, Random(seed + 1)) }
-    timed("assignHeights") { assignHeights(grid, worldWidth, worldHeight, seed + 2, maxHeight, fraction) }
-    timed("assignLatitude") { assignLatitude(grid, worldHeight) }
-    timed("assignTemperature") { assignTemperature(grid) }
-    timed("assignBaseMoisture") { assignMoisture(grid, worldHeight, worldWidth, seed + 3) }
-    val order = timed("assignRivers") { assignRivers(grid, maxHeight) }
-    timed("assignLakes") { assignLakes(grid) }
-    val steps = timed("cutRivers") { cutRivers(grid, order, worldWidth, worldHeight, Random(seed + 4)) }
-    timed("createLakes") { createLakes(grid) }
-    timed("createRivers") { createRivers(grid, order, steps) }
-    timed("assignZonalBiomes") { assignZonalBiome(grid) }
+class GenerationParams(
+    val worldWidth: Float, val worldHeight: Float, val cellCount: Int,
+    val seed: Long, val maxHeight: Int, val fraction: Float,
+    val latitudeFrom: Float = -90f, val latitudeTo: Float = 90f,
+    val equatorTemperature: Float = 26.2f,
+    val northPoleTemperature: Float = -18.3f,
+    val southPoleTemperature: Float = -18.3f,
+    val lapseRate: Float = 6.5f,
+    val humidity: Float = 1f,
+    val lakeMinMoisture: Float = 0.2f,
+    val riverThreshold: Float = 50f,
+    val baseFrequency: Float = 2f,
+    val heightPower: Float = 3f
+)
+
+class GenerationContext(val params: GenerationParams, val grid: MapGrid) {
+    var order: List<Cell> = emptyList()                       // из RIVERS
+    var riverSteps: Map<Cell, RiverStep> = emptyMap()         // из CUT_RIVERS
+}
+
+var coefficient = 1f
+    private set
+
+val DEFAULT_STEPS: List<GenerationStep> = GenerationStep.entries.toList()
+
+fun generateMap(params: GenerationParams, steps: List<GenerationStep> = DEFAULT_STEPS, onStep: (String) -> Unit = {}): MapGrid {
+    coefficient = params.worldWidth / 4000f
+    onStep("Сетка")
+    val random = Random(params.seed)
+    val sites = generateSites(params.worldWidth, params.worldHeight, params.cellCount, random)
+    val grid = buildGrid(sites, triangulate(sites), params.worldWidth, params.worldHeight)
+    val context = GenerationContext(params, grid)
+    for (step in steps) {
+        onStep(step.loadingString())
+        timed(step.name) { step.run(context) }
+    }
     println("edges with NaN: ${grid.edges.count { e -> e.points.any { it.isNaN() } }}")
     println("zero-length edges: ${grid.edges.count { it.start.x == it.end.x && it.start.y == it.end.y }}")
     return grid

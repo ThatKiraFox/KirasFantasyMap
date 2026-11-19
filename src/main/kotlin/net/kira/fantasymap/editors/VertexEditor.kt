@@ -5,17 +5,18 @@ import net.kira.fantasymap.generation.hydrology.cutAlongRiver
 import net.kira.fantasymap.generation.hydrology.uncutRiver
 import net.kira.fantasymap.generation.hydrology.updateRiverProfiles
 import net.kira.fantasymap.generation.segmentsCross
-import net.kira.fantasymap.model.pointshape.Lake
-import net.kira.fantasymap.model.pointshape.PointShape
-import net.kira.fantasymap.model.pointshape.River
+import net.kira.fantasymap.model.Biomes
 import net.kira.fantasymap.model.mapgrid.Cell
 import net.kira.fantasymap.model.mapgrid.CellIndex
 import net.kira.fantasymap.model.mapgrid.Edge
 import net.kira.fantasymap.model.mapgrid.MapGrid
 import net.kira.fantasymap.model.mapgrid.Vertex
+import net.kira.fantasymap.model.pointshape.Lake
+import net.kira.fantasymap.model.pointshape.PointShape
+import net.kira.fantasymap.model.pointshape.River
 import net.kira.fantasymap.render.TileCache
+import kotlin.collections.iterator
 import kotlin.math.sqrt
-
 
 private const val MIN_CELL_AREA_FACTOR = 0.2f    // клетка слишком маленькая, если меньше этой доли средней
 private const val MAX_HISTORY = 200
@@ -86,7 +87,7 @@ class VertexDrag(
 
 class CurvePointDrag(
     val edge: Edge,
-    private val pointIndex: Int,
+    val pointIndex: Int,
     private val grabOffsetX: Float,
     private val grabOffsetY: Float,
     cells: List<Cell>,
@@ -141,7 +142,9 @@ sealed class FinishResult {
 
 // Запись в истории: сдвиг точки с объединениями, правка точек кривой, озёра и реки.
 // generation: у записей реки номер применения, при котором они сделаны (по нему отмена правок реки находит свои записи).
-private sealed class HistoryItem
+private sealed class HistoryItem {
+    lateinit var saved: Edit      // что пишется в файл сохранения
+}
 private class EditRecord(val drag: EditDrag, val merges: List<MergeCells>) : HistoryItem()
 private class PointEdit(val edge: Edge, val index: Int, val x: Float, val y: Float, val added: Boolean) : HistoryItem()
 private class ShapeMoveEdit(val shape: PointShape, val index: Int, val startX: Float, val startY: Float, val endX: Float, val endY: Float, val generation: Int) : HistoryItem()
@@ -149,12 +152,14 @@ private class LakeListEdit(val lake: Lake, val position: Int, val added: Boolean
 private class RiverListEdit(val river: River, val position: Int, val added: Boolean, val generation: Int) : HistoryItem()
 private class RiverPointEdit(val river: River, val index: Int, val x: Float, val y: Float, val added: Boolean, val generation: Int) : HistoryItem()
 private class RiverWaterEdit(val river: River, val startBefore: Float, val endBefore: Float, val startAfter: Float, val endAfter: Float) : HistoryItem()
+private class BiomeStrokeEdit(val before: Map<Cell, Biomes?>, val biome: Biomes) : HistoryItem()
 
 class VertexEditor(
     private val grid: MapGrid,
     private val cellIndex: CellIndex,
     private val tileCache: TileCache,
-    averageCellArea: Float
+    averageCellArea: Float,
+    private val riverThreshold: Float
 ) {
     private val validator = CellValidator()
     private val minCellArea = averageCellArea * MIN_CELL_AREA_FACTOR
@@ -162,6 +167,19 @@ class VertexEditor(
     private val undoStack = ArrayList<HistoryItem>()
     private val redoStack = ArrayList<HistoryItem>()
     private val unsynced = LinkedHashSet<River>()      // реки, которые правили после последнего применения
+    private val journal = ArrayList<Edit>()            // правки для сохранения: без лимита, в порядке применения
+
+    // Итоговый набор правок пользователя в порядке применения.
+    fun savedEdits(): List<Edit> = journal.toList()
+    var isDirty = false
+        private set
+
+    fun restoreJournal(edits: List<Edit>) {
+        journal.clear()
+        journal.addAll(edits)
+    }
+
+    fun markSaved() { isDirty = false }
 
     // Река, которой коснулись последние undo или redo.
     var touchedRiver: River? = null
@@ -269,7 +287,7 @@ class VertexEditor(
     }
 
     fun addLake(lake: Lake) {
-        changeShape(lake) { grid.lakes.add(lake) }
+        changeShape(lake) { grid.addLake(lake) }
         record(LakeListEdit(lake, grid.lakes.size - 1, added = true))
     }
 
@@ -281,7 +299,7 @@ class VertexEditor(
     }
 
     fun addRiver(river: River) {
-        changeShape(river) { grid.rivers.add(river) }
+        changeShape(river) { grid.addRiver(river) }
         record(RiverListEdit(river, grid.rivers.size - 1, added = true, generation = river.generation))
     }
 
@@ -352,12 +370,15 @@ class VertexEditor(
         }
         val reach = river.margin + 3f * cellSize        // клетки вдоль линии шире самой линии
         tileCache.invalidate(lowX - reach, lowY - reach, highX + reach, highY + reach)
+        journal.add(ApplyRiver(river.id))
+        isDirty = true
         return failed
     }
 
     // Возвращает реку к состоянию на момент последнего применения. Правки после него пропадают и из истории.
     // Запись о воде в истории остаётся: вода от разрезов не зависит.
     fun discardRiver(river: River) {
+        journal.removeAll(undoStack.filter { belongsToSession(it, river) }.map { it.saved })
         undoStack.removeAll { belongsToSession(it, river) }
         redoStack.removeAll { belongsToSession(it, river) }
         val applied = river.cutPoints
@@ -378,6 +399,8 @@ class VertexEditor(
     fun undo(): Boolean {
         touchedRiver = null
         val item = undoStack.removeLastOrNull() ?: return false
+        journal.remove(item.saved)
+        isDirty = true
         when (item) {
             is EditRecord -> {
                 for (merge in item.merges.asReversed()) revertMerge(merge)
@@ -395,6 +418,7 @@ class VertexEditor(
                 item.river.startWater = item.startBefore
                 item.river.endWater = item.endBefore
             }
+            is BiomeStrokeEdit -> setBiomes(item, undo = true)
         }
         touchedRiver = riverOf(item)
         redoStack.add(item)
@@ -405,6 +429,8 @@ class VertexEditor(
     fun redo(): Boolean {
         touchedRiver = null
         val item = redoStack.removeLastOrNull() ?: return false
+        journal.add(item.saved)
+        isDirty = true
         when (item) {
             is EditRecord -> {
                 item.drag.restoreEnd()
@@ -422,6 +448,7 @@ class VertexEditor(
                 item.river.startWater = item.startAfter
                 item.river.endWater = item.endAfter
             }
+            is BiomeStrokeEdit -> setBiomes(item, undo = false)
         }
         touchedRiver = riverOf(item)
         undoStack.add(item)
@@ -446,9 +473,57 @@ class VertexEditor(
     private fun areasOf(cells: List<Cell>): Map<Cell, Float> = cells.associateWith { it.area() }
 
     private fun record(item: HistoryItem) {
+        item.saved = toEdit(item)
+        journal.add(item.saved)
+        isDirty = true
         undoStack.add(item)
         redoStack.clear()                                     // после новой правки «повторить» не имеет смысла
-        if (undoStack.size > MAX_HISTORY) undoStack.removeAt(0)
+        if (undoStack.size > MAX_HISTORY) undoStack.removeAt(0)     // лимит только у undo, журнал не режется
+    }
+
+    // Запись в файл сохранения: всё по id. Вызывается в момент записи, пока точки стоят там, где они оказались после правки.
+    private fun toEdit(item: HistoryItem): Edit = when (item) {
+        is EditRecord -> {
+            val merges = item.merges.map { Pair(it.small.id, it.target.id) }
+            when (val drag = item.drag) {
+                is VertexDrag -> MoveVertex(drag.vertex.id, drag.currentX, drag.currentY, merges)
+                is CurvePointDrag -> MoveCurvePoint(drag.edge.start.id, drag.edge.end.id, drag.pointIndex, drag.currentX, drag.currentY, merges)
+                else -> error("Unknown drag")
+            }
+        }
+        is PointEdit -> CurvePointChange(item.edge.start.id, item.edge.end.id, item.index, item.x, item.y, item.added)
+        is ShapeMoveEdit -> MoveShapePoint(item.shape.id, item.index, item.endX, item.endY)
+        is LakeListEdit ->
+            if (item.added) AddLake(item.lake.id, item.lake.points.copyOf()) else RemoveShape(item.lake.id)
+        is RiverListEdit ->
+            if (item.added) AddRiver(item.river.id, item.river.points.copyOf(), item.river.startWater, item.river.endWater)
+            else RemoveShape(item.river.id)
+        is RiverPointEdit -> RiverPointChange(item.river.id, item.index, item.x, item.y, item.added)
+        is RiverWaterEdit -> SetRiverWater(item.river.id, item.startAfter, item.endAfter)
+        is BiomeStrokeEdit -> PaintBiomes(item.biome.name, item.before.keys.map { it.id }.toIntArray())
+    }
+
+    // ---- Биомы ----
+
+    fun recordBiomeStroke(stroke: Map<Cell, Biomes?>, biome: Biomes) {
+        if (stroke.isNotEmpty()) record(BiomeStrokeEdit(HashMap(stroke), biome))
+    }
+
+    private fun setBiomes(item: BiomeStrokeEdit, undo: Boolean) {
+        var lowX = Float.MAX_VALUE
+        var lowY = Float.MAX_VALUE
+        var highX = -Float.MAX_VALUE
+        var highY = -Float.MAX_VALUE
+        for ((cell, old) in item.before) {
+            if (cell.isRemoved) continue
+            cell.biome = if (undo) old else item.biome
+            lowX = minOf(lowX, cell.minX)
+            highX = maxOf(highX, cell.maxX)
+            lowY = minOf(lowY, cell.minY)
+            highY = maxOf(highY, cell.maxY)
+        }
+        if (lowX > highX) return
+        tileCache.invalidate(lowX, lowY, highX, highY)
     }
 
     // Выполняет изменение озера или реки и просит перерисовать плитки там, где фигура была и где стала.
@@ -470,7 +545,7 @@ class VertexEditor(
 
     // Пересчитывает толщину рек; у других рек, у которых она изменилась (приток сдвинули или поменяли ему воду), перерисовывает плитки.
     private fun refreshProfiles(except: River?) {
-        for (river in updateRiverProfiles(grid.rivers)) {
+        for (river in updateRiverProfiles(grid.rivers, riverThreshold)) {
             if (river === except) continue
             val margin = river.margin
             tileCache.invalidate(river.minX - margin, river.minY - margin, river.maxX + margin, river.maxY + margin)
@@ -532,7 +607,7 @@ class VertexEditor(
         for (edge in small.edges) {
             for (neighbor in edge.cells) {
                 if (neighbor === small || neighbor.isRemoved || neighbor in plans) continue
-                MergeCells.Companion.plan(small, neighbor)?.let { plans[neighbor] = it }
+                MergeCells.plan(small, neighbor)?.let { plans[neighbor] = it }
             }
         }
         return plans

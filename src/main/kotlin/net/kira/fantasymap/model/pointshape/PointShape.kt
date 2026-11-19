@@ -1,6 +1,9 @@
 package net.kira.fantasymap.model.pointshape
 
+// Общая основа озера и реки: точки x, y, x, y... и габариты.
 sealed class PointShape(initialPoints: FloatArray) {
+    var id = -1                    // общий счётчик для озёр и рек, выдаёт MapGrid
+
     var points: FloatArray = initialPoints
         set(value) {
             field = value

@@ -5,6 +5,8 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
+import androidx.compose.ui.graphics.drawscope.drawIntoCanvas
+import androidx.compose.ui.graphics.nativeCanvas
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import net.kira.fantasymap.Camera
@@ -14,7 +16,27 @@ import net.kira.fantasymap.model.mapgrid.Cell
 import net.kira.fantasymap.model.pointshape.Lake
 import net.kira.fantasymap.model.pointshape.PointShape
 import net.kira.fantasymap.model.pointshape.River
-import net.kira.fantasymap.render.*
+import net.kira.fantasymap.render.TILE_SIZE
+import net.kira.fantasymap.render.TileCache
+import net.kira.fantasymap.render.TileKey
+import net.kira.fantasymap.render.addLakePath
+import net.kira.fantasymap.render.addRiverPath
+import net.kira.fantasymap.render.curvePointColor
+import net.kira.fantasymap.render.edit
+import net.kira.fantasymap.render.failedEdit
+import net.kira.fantasymap.render.handleBorderColor
+import net.kira.fantasymap.render.invalidCellColor
+import net.kira.fantasymap.render.levelForScale
+import net.kira.fantasymap.render.neighborCellColor
+import net.kira.fantasymap.render.neighborCellOutline
+import net.kira.fantasymap.render.pixelsPerUnit
+import net.kira.fantasymap.render.smallCellColor
+import net.kira.fantasymap.render.smallCellOutline
+import net.kira.fantasymap.render.standardCellColor
+import org.jetbrains.skia.Canvas
+import org.jetbrains.skia.Rect
+import org.jetbrains.skia.SamplingMode
+import kotlin.collections.get
 import kotlin.math.floor
 import kotlin.math.roundToInt
 
@@ -23,6 +45,7 @@ private const val MAX_FALLBACK_STEPS = 9
 class RenderStats {
     var drawnTiles = 0
     var waitingTiles = 0
+    var drawNanos = 0L
 }
 
 fun DrawScope.drawTiles(camera: Camera, tileCache: TileCache, worldWidth: Float, worldHeight: Float, stats: RenderStats) {
@@ -43,29 +66,65 @@ fun DrawScope.drawTiles(camera: Camera, tileCache: TileCache, worldWidth: Float,
 
     var drawn = 0
     var waiting = 0
-    for (column in firstColumn..lastColumn) {
-        for (row in firstRow..lastRow) {
-            // Края плиток округляем до целых пикселей, чтобы соседние плитки сходились без щелей.
-            val left = camera.worldToScreenX(column * tileWorldSize, size.width).roundToInt()
-            val right = camera.worldToScreenX((column + 1) * tileWorldSize, size.width).roundToInt()
-            val top = camera.worldToScreenY((row + 1) * tileWorldSize, size.height).roundToInt()
-            val bottom = camera.worldToScreenY(row * tileWorldSize, size.height).roundToInt()
-            val destinationOffset = IntOffset(left, top)
-            val destinationSize = IntSize(right - left, bottom - top)
+    drawIntoCanvas { canvas ->
+        val native = canvas.nativeCanvas
+        val source = Rect.makeWH(TILE_SIZE.toFloat(), TILE_SIZE.toFloat())
+        for (column in firstColumn..lastColumn) {
+            for (row in firstRow..lastRow) {
+                // Края плиток округляем до целых пикселей, чтобы соседние плитки сходились без щелей.
+                val left = camera.worldToScreenX(column * tileWorldSize, size.width).roundToInt()
+                val right = camera.worldToScreenX((column + 1) * tileWorldSize, size.width).roundToInt()
+                val top = camera.worldToScreenY((row + 1) * tileWorldSize, size.height).roundToInt()
+                val bottom = camera.worldToScreenY(row * tileWorldSize, size.height).roundToInt()
 
-            val key = TileKey(level, column, row)
-            val image = tileCache.get(key)
-            if (image != null) {
-                drawImage(image, IntOffset.Zero, IntSize(TILE_SIZE, TILE_SIZE), destinationOffset, destinationSize)
-                drawn++
-            } else {
-                drawFallbackTile(tileCache, key, destinationOffset, destinationSize)
-                waiting++
+                val key = TileKey(level, column, row)
+                val image = tileCache.get(key)
+                if (image != null) {
+                    native.drawImageRect(
+                        image, source,
+                        Rect.makeLTRB(left.toFloat(), top.toFloat(), right.toFloat(), bottom.toFloat()),
+                        SamplingMode.LINEAR, null, true
+                    )
+                    drawn++
+                } else {
+                    drawFallbackTile(native, tileCache, key, IntOffset(left, top), IntSize(right - left, bottom - top))
+                    waiting++
+                }
             }
         }
     }
     stats.drawnTiles = drawn
     stats.waitingTiles = waiting
+}
+
+// Пока нужной плитки нет, показываем нужный кусок готовой плитки грубее уровнем.
+private fun drawFallbackTile(
+    native: Canvas,
+    cache: TileCache,
+    key: TileKey,
+    destinationOffset: IntOffset,
+    destinationSize: IntSize
+) {
+    for (steps in 1..MAX_FALLBACK_STEPS) {
+        if (key.level - steps < 0) return
+        val parentKey = TileKey(key.level - steps, key.column shr steps, key.row shr steps)
+        val parentImage = cache.peek(parentKey) ?: continue
+        val partSize = TILE_SIZE shr steps                       // сторона нужного куска в пикселях родителя
+        val mask = (1 shl steps) - 1
+        val sourceX = (key.column and mask) * partSize
+        val sourceY = (mask - (key.row and mask)) * partSize     // верх картинки это бо́льшие Y мира
+        native.drawImageRect(
+            parentImage,
+            Rect.makeXYWH(sourceX.toFloat(), sourceY.toFloat(), partSize.toFloat(), partSize.toFloat()),
+            Rect.makeLTRB(
+                destinationOffset.x.toFloat(), destinationOffset.y.toFloat(),
+                (destinationOffset.x + destinationSize.width).toFloat(),
+                (destinationOffset.y + destinationSize.height).toFloat()
+            ),
+            SamplingMode.LINEAR, null, true
+        )
+        return
+    }
 }
 
 // Предпросмотр правки и выделение поверх плиток.
@@ -96,9 +155,12 @@ fun DrawScope.drawEditOverlay(state: MapState) {
         currentPending.smallCell?.let { drawOutline(it, camera, path, smallCellColor, smallCellOutline) }
     }
     if (selected != null && currentPending == null) {
-        drawHandles(selected, camera, currentDrag, showCurvePoints = camera.scale >= CURVE_HANDLES_MIN_SCALE)
+        drawHandles(selected, camera, currentDrag, showCurvePoints = camera.scale >= (CURVE_HANDLES_MIN_SCALE))
     }
     state.selectedShape?.let { drawShape(it, camera, path, state.shapeDrag) }
+    if (state.biomeMode) {
+        drawCircle(standardCellColor, radius = state.brushRadius * camera.scale, center = state.hoverPosition, style = Stroke(width = 2f))
+    }
 }
 
 // Контур клетки с полупрозрачной заливкой.
@@ -165,20 +227,5 @@ private fun DrawScope.drawShape(shape: PointShape, camera: Camera, path: Path, a
         )
         drawCircle(handleBorderColor, radius = 7f, center = center)
         drawCircle(if (active?.pointIndex == i) Color(0xFFFFDD44) else standardCellColor, radius = 5f, center = center)
-    }
-}
-
-// Пока нужной плитки нет, показываем нужный кусок готовой плитки грубее уровнем.
-private fun DrawScope.drawFallbackTile(cache: TileCache, key: TileKey, destinationOffset: IntOffset, destinationSize: IntSize) {
-    for (steps in 1..MAX_FALLBACK_STEPS) {
-        if (key.level - steps < 0) return
-        val parentKey = TileKey(key.level - steps, key.column shr steps, key.row shr steps)
-        val parentImage = cache.peek(parentKey) ?: continue
-        val partSize = TILE_SIZE shr steps                       // сторона нужного куска в пикселях родителя
-        val mask = (1 shl steps) - 1
-        val sourceX = (key.column and mask) * partSize
-        val sourceY = (mask - (key.row and mask)) * partSize     // верх картинки это бо́льшие Y мира
-        drawImage(parentImage, IntOffset(sourceX, sourceY), IntSize(partSize, partSize), destinationOffset, destinationSize)
-        return
     }
 }

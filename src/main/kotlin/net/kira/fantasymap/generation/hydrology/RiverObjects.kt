@@ -4,10 +4,11 @@ import net.kira.fantasymap.model.mapgrid.Cell
 import net.kira.fantasymap.model.mapgrid.Edge
 import net.kira.fantasymap.model.mapgrid.MapGrid
 import net.kira.fantasymap.model.pointshape.River
-import kotlin.collections.first
+import kotlin.text.compareTo
 
-fun createRivers(grid: MapGrid, order: List<Cell>, steps: Map<Cell, RiverStep>) {
-    val riverCells = order.asReversed().filter { it.flowsTo != null && it.water >= RIVER_THRESHOLD }   // от истоков к устьям
+// Собирает из шагов разрезов объекты River: по одной на цепочку клеток от истока до устья или до впадения в другую реку.
+fun createRivers(grid: MapGrid, order: List<Cell>, steps: Map<Cell, RiverStep>, riverThreshold: Float): Unit {
+    val riverCells = order.asReversed().filter { it.flowsTo != null && it.water >= (riverThreshold) }   // от истоков к устьям
     val isRiver = HashSet<Cell>(riverCells)
 
     // В клетку втекает несколько рек: продолжает самая мощная, остальные заканчиваются на впадении.
@@ -40,17 +41,17 @@ fun createRivers(grid: MapGrid, order: List<Cell>, steps: Map<Cell, RiverStep>) 
             step.cut?.let { cutEdges.add(it) }
         }
         if (line.size < 4) continue
-        val river = River(line.toFloatArray(), chain.first().water, chain.last().water)
+        val river = River(line.toFloatArray(), chain.first().water, chain.last().water, riverThreshold)
         river.cutEdges.addAll(cutEdges)
         river.cutPoints = river.points.copyOf()          // уже нарезана
-        grid.rivers.add(river)
+        grid.addRiver(river)
         created++
     }
 
     // Рёбра больше не рисуют реку сами, её рисует оверлей.
     for (step in steps.values) for (edge in step.edges) edge.riverWater = 0f
 
-    updateRiverProfiles(grid.rivers)
+    updateRiverProfiles(grid.rivers, riverThreshold)
     println("rivers: $created")
 }
 

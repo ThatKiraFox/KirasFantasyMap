@@ -1,5 +1,6 @@
 package net.kira.fantasymap.generation.hydrology
 
+import net.kira.fantasymap.generation.general.coefficient
 import net.kira.fantasymap.model.pointshape.River
 import net.kira.fantasymap.model.pointshape.WaterProfile
 import kotlin.math.hypot
@@ -11,7 +12,7 @@ private class Junction(val s: Float, val width: Float)
 private class Nearest(val distance: Float, val s: Float)
 
 // Пересчитывает, как растёт толщина вдоль каждой реки. Возвращает реки, у которых профиль изменился.
-fun updateRiverProfiles(rivers: List<River>): List<River> {
+fun updateRiverProfiles(rivers: List<River>, riverThreshold: Float): List<River> {
     val junctions = HashMap<River, ArrayList<Junction>>()
     for (tributary in rivers) {
         val points = tributary.points
@@ -20,19 +21,19 @@ fun updateRiverProfiles(rivers: List<River>): List<River> {
         val y = points[points.size - 1]
         for (main in rivers) {
             if (main === tributary) continue
-            if (x < main.minX - JOIN_TOLERANCE || x > main.maxX + JOIN_TOLERANCE ||
-                y < main.minY - JOIN_TOLERANCE || y > main.maxY + JOIN_TOLERANCE
+            if (x < main.minX - JOIN_TOLERANCE * coefficient || x > main.maxX + JOIN_TOLERANCE * coefficient ||
+                y < main.minY - JOIN_TOLERANCE * coefficient || y > main.maxY + JOIN_TOLERANCE * coefficient
             ) continue
             val hit = nearestOnLine(main.points, x, y) ?: continue
-            if (hit.distance <= JOIN_TOLERANCE) {
-                junctions.getOrPut(main) { ArrayList() }.add(Junction(hit.s, riverWidth(tributary.endWater)))
+            if (hit.distance <= JOIN_TOLERANCE * coefficient) {
+                junctions.getOrPut(main) { ArrayList() }.add(Junction(hit.s, riverWidth(tributary.endWater, riverThreshold)))
             }
         }
     }
     val changed = ArrayList<River>()
     for (river in rivers) {
         val old = river.profile
-        val new = buildProfile(river, junctions[river] ?: emptyList())
+        val new = buildProfile(river, junctions[river] ?: emptyList(), riverThreshold)
         river.profile = new
         if (!old.s.contentEquals(new.s) || !old.w.contentEquals(new.w) || old.length != new.length) changed.add(river)
     }
@@ -40,13 +41,13 @@ fun updateRiverProfiles(rivers: List<River>): List<River> {
 }
 
 // Толщина растёт от начальной к конечной по прямой; в месте впадения скачок, после него оставшийся путь до конечной толщины короче, значит рост медленнее.
-private fun buildProfile(river: River, junctions: List<Junction>): WaterProfile {
+private fun buildProfile(river: River, junctions: List<Junction>, riverThreshold: Float): WaterProfile {
     val length = lineLength(river.points)
-    val endWidth = riverWidth(river.endWater)
+    val endWidth = riverWidth(river.endWater, riverThreshold)
     val s = ArrayList<Float>()
     val w = ArrayList<Float>()
     var position = 0f
-    var value = riverWidth(river.startWater)
+    var value = riverWidth(river.startWater, riverThreshold)
     s.add(0f)
     w.add(value)
     for (junction in junctions.sortedBy { it.s }) {

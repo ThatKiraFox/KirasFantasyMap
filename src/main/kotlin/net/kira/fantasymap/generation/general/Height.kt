@@ -3,11 +3,12 @@ package net.kira.fantasymap.generation.general
 import net.kira.fantasymap.imported.FastNoiseLite
 import net.kira.fantasymap.model.mapgrid.MapGrid
 import kotlin.math.max
+import kotlin.math.pow
 
 private const val MIN_HEIGHT = -999
-private const val BASE_FREQUENCY = 3f
 
-fun assignHeights(grid: MapGrid, worldWidth: Float, worldHeight: Float, seed: Long, maxHeight: Int, fraction: Float) {
+fun assignHeights(grid: MapGrid, worldWidth: Float, worldHeight: Float, seed: Long, maxHeight: Int, fraction: Float,
+                  baseFrequency: Float, heightPower: Float) {
     val noise = FastNoiseLite((seed + 1).toInt()).apply {
         SetNoiseType(FastNoiseLite.NoiseType.OpenSimplex2)
         SetFractalType(FastNoiseLite.FractalType.FBm)
@@ -20,7 +21,7 @@ fun assignHeights(grid: MapGrid, worldWidth: Float, worldHeight: Float, seed: Lo
     for (cell in grid.cells) {
         val centerX = (cell.minX + cell.maxX) / 2f
         val centerY = (cell.minY + cell.maxY) / 2f
-        val value = noise.GetNoise(centerX / worldSize * BASE_FREQUENCY, centerY / worldSize * BASE_FREQUENCY)  // примерно от -1 до 1
+        val value = noise.GetNoise(centerX / worldSize * baseFrequency, centerY / worldSize * baseFrequency)  // примерно от -1 до 1
         cell.height = (value * maxHeight).toInt()
     }
     val heights = IntArray(grid.cells.size) { grid.cells[it].height }.apply { sort() }
@@ -28,6 +29,12 @@ fun assignHeights(grid: MapGrid, worldWidth: Float, worldHeight: Float, seed: Lo
     val threshold = heights[index] + if (fraction >= 1f) 1 else 0
     for (cell in grid.cells) {
         cell.height = (cell.height - threshold).coerceIn(MIN_HEIGHT, maxHeight)
+    }
+    val peak = grid.cells.maxOf { it.height }.coerceAtLeast(1)
+    for (cell in grid.cells) {
+        if (cell.height <= 0) continue
+        val share = cell.height.toFloat() / peak
+        cell.height = (share.pow(heightPower) * maxHeight).toInt().coerceAtLeast(1)
     }
     val h = grid.cells.filter { !it.isRemoved && it.height > 0 }.map { it.height }.sorted()
     println("land height: p10 ${h[h.size / 10]}, p50 ${h[h.size / 2]}, p90 ${h[h.size * 9 / 10]}")

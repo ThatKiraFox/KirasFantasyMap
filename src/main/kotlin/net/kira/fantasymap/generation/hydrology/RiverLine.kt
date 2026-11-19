@@ -5,6 +5,7 @@ import net.kira.fantasymap.editors.MergeCells
 import net.kira.fantasymap.generation.segmentsCross
 import net.kira.fantasymap.editors.splitEdge
 import net.kira.fantasymap.editors.unsplitVertex
+import net.kira.fantasymap.generation.general.coefficient
 import net.kira.fantasymap.model.mapgrid.Cell
 import net.kira.fantasymap.model.mapgrid.CellIndex
 import net.kira.fantasymap.model.mapgrid.Edge
@@ -46,11 +47,12 @@ fun cutAlongRiver(grid: MapGrid, index: CellIndex, river: River) {
     val parts = HashMap<Edge, ArrayList<Edge>>()      // исходное ребро -> его куски после разбиений
 
     fun vertexFor(crossing: Crossing): Vertex {
+        val snap0 = SNAP * coefficient
         crossing.vertex?.let { return it }
         val list = parts.getOrPut(crossing.edge!!) { arrayListOf(crossing.edge) }
         for (part in list) {
             for (end in listOf(part.start, part.end)) {
-                if (hypot(end.x - crossing.x, end.y - crossing.y) < SNAP) {
+                if (hypot(end.x - crossing.x, end.y - crossing.y) < snap0) {
                     crossing.vertex = end
                     return end
                 }
@@ -281,11 +283,12 @@ private fun splitCell(grid: MapGrid, index: CellIndex, cell: Cell, a: Vertex, b:
 }
 
 private fun vertexAt(index: CellIndex, x: Float, y: Float): Vertex? {
-    for (cell in index.cellsIn(x - SNAP, y - SNAP, x + SNAP, y + SNAP)) {
+    val snap0 = SNAP * coefficient
+    for (cell in index.cellsIn(x - snap0, y - snap0, x + snap0, y + snap0)) {
         if (cell.isRemoved) continue
         for (edge in cell.edges) {
-            if (hypot(edge.start.x - x, edge.start.y - y) < SNAP) return edge.start
-            if (hypot(edge.end.x - x, edge.end.y - y) < SNAP) return edge.end
+            if (hypot(edge.start.x - x, edge.start.y - y) < snap0) return edge.start
+            if (hypot(edge.end.x - x, edge.end.y - y) < snap0) return edge.end
         }
     }
     return null
@@ -293,9 +296,10 @@ private fun vertexAt(index: CellIndex, x: Float, y: Float): Vertex? {
 
 // Идёт ли участок по уже существующему ребру между a и b (так сгенерированная река идёт вдоль границы).
 private fun followsEdge(a: Vertex, b: Vertex, inner: FloatArray): Boolean {
+    val snap0 = SNAP * coefficient
     val edge = a.edges.firstOrNull { it.otherVertex(a) === b } ?: return false
     if (inner.isEmpty() || edge.points.isEmpty()) return inner.isEmpty() && edge.points.isEmpty()
     val edgeX = if (edge.start === a) edge.points[0] else edge.points[edge.points.size - 2]
     val edgeY = if (edge.start === a) edge.points[1] else edge.points[edge.points.size - 1]
-    return hypot(inner[0] - edgeX, inner[1] - edgeY) < SNAP
+    return hypot(inner[0] - edgeX, inner[1] - edgeY) < snap0
 }

@@ -76,8 +76,8 @@ class ShapeEditor(private val grid: MapGrid, private val tileCache: TileCache, p
     fun removeLake(lake: Lake) = history.removeLake(lake)
 
     // Новая река: три точки в ряд, дальше форму задаёт пользователь.
-    fun addRiver(x: Float, y: Float, halfLength: Float): River =
-        River(floatArrayOf(x - halfLength, y, x, y, x + halfLength, y), NEW_RIVER_START_WATER, NEW_RIVER_END_WATER)
+    fun addRiver(x: Float, y: Float, halfLength: Float, riverThreshold: Float): River =
+        River(floatArrayOf(x - halfLength, y, x, y, x + halfLength, y), NEW_RIVER_START_WATER, NEW_RIVER_END_WATER, riverThreshold)
             .also { history.addRiver(it) }
 
     fun removeRiver(river: River) = history.removeRiver(river)

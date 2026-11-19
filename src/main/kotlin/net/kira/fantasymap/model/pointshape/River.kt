@@ -10,10 +10,10 @@ import kotlin.math.hypot
 // Как растёт вода вдоль реки: узлы (s, w) соединены прямыми, два узла с одним s дают скачок. s: длина вдоль линии от начала.
 class WaterProfile(val s: FloatArray, val w: FloatArray, val length: Float)
 
-class River(points: FloatArray, start: Float, end: Float) : PointShape(points) {
+class River(points: FloatArray, start: Float, end: Float, val riverThreshold: Float) : PointShape(points) {
     var startWater = start
     var endWater = end                         // предел: толщина дальше не растёт
-    @Volatile var profile = WaterProfile(floatArrayOf(0f, 1f), floatArrayOf(riverWidth(start), riverWidth(end)), 1f)   // пересчитывается в updateRiverProfiles   // пересчитывается в updateRiverProfiles
+    @Volatile var profile = WaterProfile(floatArrayOf(0f, 1f), floatArrayOf(riverWidth(start, riverThreshold), riverWidth(end, riverThreshold)), 1f)   // пересчитывается в updateRiverProfiles   // пересчитывается в updateRiverProfiles
 
     val cutEdges = ArrayList<Edge>()          // рёбра, которые эта река проложила в клетках
     val splitVertices = ArrayList<Vertex>()   // вершины, которые она добавила на чужие границы
@@ -21,7 +21,7 @@ class River(points: FloatArray, start: Float, end: Float) : PointShape(points) {
     var generation = 0                        // растёт с каждым применением; по нему отмена правок находит свои записи в истории
 
 
-    override val margin: Float get() = riverWidth(maxOf(startWater, endWater))
+    override val margin: Float get() = riverWidth(maxOf(startWater, endWater), riverThreshold = riverThreshold )
 
     // inGrid: стоит ли река сейчас на карте. Грязная река отличается от того, что реально нарезано.
     fun isDirty(inGrid: Boolean): Boolean {

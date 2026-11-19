@@ -1,11 +1,10 @@
 package net.kira.fantasymap.generation.general
 
-import net.kira.fantasymap.generation.hydrology.RIVER_THRESHOLD
 import net.kira.fantasymap.generation.hydrology.findOcean
 import net.kira.fantasymap.model.Biomes
 import net.kira.fantasymap.model.mapgrid.Cell
 import net.kira.fantasymap.model.mapgrid.MapGrid
-import java.util.Arrays
+import java.util.*
 import kotlin.math.ln
 
 private const val FLAT_SLOPE = 10f              // S3 ниже этого: Flat (медиана slope 14.7, p10 6.3)
@@ -19,7 +18,7 @@ private const val GLACIER_TEMPERATURE = -36f    // T ниже этого: лед
 private const val OCEAN_GLACIER_TEMPERATURE = -11f
 
 // Зональные биомы суши: температура в градусах, влажность в перцентилях по суше.
-private const val COLD = -5f
+private const val COLD = -15f
 private const val COOL = 5f
 private const val WARM = 20f
 
@@ -30,6 +29,8 @@ private const val W_MEDIUM = 0.555f      // было 0.4: саванна
 private const val W_MOIST = 0.59f        // было 0.45: луг
 private const val W_WET = 0.68f          // было 0.6
 private const val W_VERY_WET = 0.80f     // было 0.8
+private const val W_STEPPE = 0.38f
+private const val W_TUNDRA = 0.2f
 
 // Зональные леса: на реке в них галерейный лес не нужен. FOREST_STEPPE сюда не входит.
 private val forests = setOf(
@@ -48,7 +49,7 @@ class Percentiles(values: FloatArray) {
     }
 }
 
-fun assignZonalBiome(grid: MapGrid) {
+fun assignZonalBiome(grid: MapGrid, riverThreshold: Float) {
     val isOcean = findOcean(grid)
     val land = grid.cells.filter { it.height > 0 && !it.isRemoved }
     val slopes = land.map { slope(it) }.sorted()
@@ -68,7 +69,7 @@ fun assignZonalBiome(grid: MapGrid) {
     println("zonal: ${land.groupingBy { it.biome }.eachCount()}")
     val m = land.map { it.moisture }.sorted()
     println("moisture: p10 ${m[m.size / 10]}, p50 ${m[m.size / 2]}, p90 ${m[m.size * 9 / 10]}")
-    assignAzonalBiomes(grid)
+    assignAzonalBiomes(grid, riverThreshold)
 }
 
 private fun landBiome(cell: Cell, moistures: Percentiles): Biomes {
@@ -86,11 +87,11 @@ private fun landBiome(cell: Cell, moistures: Percentiles): Biomes {
             w >= W_VERY_WET -> Biomes.BROADLEAF_FOREST
             w >= W_WET -> Biomes.MIXED_FOREST
             w >= W_MOIST -> Biomes.FOREST_STEPPE
-            w >= W_SEMI_DRY -> Biomes.GRASSLAND
+            w >= W_STEPPE -> Biomes.GRASSLAND
             else -> Biomes.STEPPE
         }
         t > COLD -> if (w >= W_SEMI_DRY) Biomes.TAIGA else Biomes.COLD_STEPPE
-        else -> if (w >= W_SEMI_DRY) Biomes.TUNDRA else Biomes.ICE_DESERT
+        else -> if (w >= W_TUNDRA) Biomes.TUNDRA else Biomes.ICE_DESERT
     }
 }
 
@@ -111,7 +112,7 @@ private fun assignWaterBiome(cell: Cell, isOcean: BooleanArray) {
 
 // Вызывать после assignZonalBiome и после createRivers: азональные переопределяют зональные.
 // Использует slope(cell) и Cell.depth (D, считается в assignRivers).
-fun assignAzonalBiomes(grid: MapGrid) {
+fun assignAzonalBiomes(grid: MapGrid, riverThreshold: Float) {
 
     val cells = grid.cells.filter { it.height > 0 && !it.isRemoved }
     if (cells.isEmpty()) return
@@ -138,8 +139,8 @@ fun assignAzonalBiomes(grid: MapGrid) {
     val aThreshold = sorted[(sorted.size * A_PERCENTILE).toInt().coerceAtMost(sorted.size - 1)]
 
     // у океана water тоже накапливается из рек, поэтому русло только на суше
-    val nearWater = reach(grid, NEAR_WATER_STEPS) { it.height <= 0 || it.isLake || it.water >= RIVER_THRESHOLD }
-    val nearRiver = reach(grid, NEAR_RIVER_STEPS) { it.height > 0 && it.water >= RIVER_THRESHOLD }
+    val nearWater = reach(grid, NEAR_WATER_STEPS) { it.height <= 0 || it.isLake || it.water >= riverThreshold }
+    val nearRiver = reach(grid, NEAR_RIVER_STEPS) { it.height > 0 && it.water >= riverThreshold }
 
     val counts = HashMap<Biomes, Int>()
     for (cell in cells) {
@@ -147,7 +148,7 @@ fun assignAzonalBiomes(grid: MapGrid) {
         val aHigh = ln(1f + cell.water) >= aThreshold
         val flat = s3[id] < FLAT_SLOPE
         val pit = cell.depth > 0f
-        val isRiver = cell.water >= RIVER_THRESHOLD
+        val isRiver = cell.water >= riverThreshold
         val biome = when {                                  // порядок = приоритет, первый подошедший побеждает
             cell.temperature < GLACIER_TEMPERATURE -> Biomes.GLACIER
             cell.biome == Biomes.DESERT && aHigh && nearWater[id] -> Biomes.OASIS
@@ -170,7 +171,7 @@ fun assignAzonalBiomes(grid: MapGrid) {
 }
 
 // Клетки, до которых от источников не больше steps шагов по соседям.
-private fun reach(grid: MapGrid, steps: Int, isSource: (Cell) -> Boolean): BooleanArray {
+fun reach(grid: MapGrid, steps: Int, isSource: (Cell) -> Boolean): BooleanArray {
     val reached = BooleanArray(grid.cells.size)
     var frontier = ArrayList<Cell>()
     for (cell in grid.cells) {

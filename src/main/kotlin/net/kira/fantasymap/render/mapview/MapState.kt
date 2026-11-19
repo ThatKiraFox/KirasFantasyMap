@@ -5,23 +5,13 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Path
-import androidx.compose.ui.input.key.Key
-import androidx.compose.ui.input.key.KeyEvent
-import androidx.compose.ui.input.key.KeyEventType
-import androidx.compose.ui.input.key.isCtrlPressed
-import androidx.compose.ui.input.key.isMetaPressed
-import androidx.compose.ui.input.key.isShiftPressed
-import androidx.compose.ui.input.key.key
-import androidx.compose.ui.input.key.type
+import androidx.compose.ui.input.key.*
 import androidx.compose.ui.unit.IntSize
 import net.kira.fantasymap.Camera
-import net.kira.fantasymap.editors.EditDrag
-import net.kira.fantasymap.editors.FinishResult
-import net.kira.fantasymap.editors.Handle
-import net.kira.fantasymap.editors.PendingEdit
-import net.kira.fantasymap.editors.ShapeDrag
-import net.kira.fantasymap.editors.ShapeEditor
-import net.kira.fantasymap.editors.VertexEditor
+import net.kira.fantasymap.editors.*
+import net.kira.fantasymap.generation.GenerationStep
+import net.kira.fantasymap.generation.general.GenerationParams
+import net.kira.fantasymap.model.Biomes
 import net.kira.fantasymap.model.mapgrid.Cell
 import net.kira.fantasymap.model.mapgrid.CellIndex
 import net.kira.fantasymap.model.mapgrid.MapGrid
@@ -30,21 +20,35 @@ import net.kira.fantasymap.model.pointshape.PointShape
 import net.kira.fantasymap.model.pointshape.River
 import net.kira.fantasymap.render.LAYERS
 import net.kira.fantasymap.render.TileCache
+import net.kira.fantasymap.render.chooseFile
 import net.kira.fantasymap.render.levelForScale
+import net.kira.fantasymap.repository.SaveFile
+import java.io.File
 
-class MapState(
-    val grid: MapGrid,
-    val camera: Camera,
-    val cellIndex: CellIndex,
-    val tileCache: TileCache,
-    val editor: VertexEditor,
-    val shapeEditor: ShapeEditor,
-    val averageCellArea: Float,
-    private val requestFocus: () -> Unit
-) {
+class MapState(val grid: MapGrid,
+               val camera: Camera,
+               val cellIndex: CellIndex,
+               val tileCache: TileCache,
+               val editor: VertexEditor,
+               val shapeEditor: ShapeEditor,
+               val averageCellArea: Float,
+               val biomeEditor: BiomeEditor,
+               val params: GenerationParams,
+               val steps: List<GenerationStep>,
+               startFile: File?,
+               val onOpen: (File) -> Unit,
+               val onMenu: () -> Unit,
+               private val requestFocus: () -> Unit
+)
+{
+
     var canvasSize by mutableStateOf(IntSize.Zero)
-    val picker = MapPicker(camera) { canvasSize }
+    val picker: MapPicker = MapPicker(camera) { canvasSize }
     val outlinePath = Path()
+    private var lastPress = Offset.Zero
+
+
+
 
     var editModeState by mutableStateOf(false)
     var selectedCell by mutableStateOf<Cell?>(null)
@@ -59,13 +63,24 @@ class MapState(
     var message by mutableStateOf<String?>(null)
     var layers by mutableStateOf(tileCache.layers)
     var layersOpen by mutableStateOf(false)
+    var hoverCell by mutableStateOf<Cell?>(null)
+    var hoverPosition by mutableStateOf(Offset.Zero)
 
+    var biomeMode by mutableStateOf(false)
+    var brushBiome by mutableStateOf(Biomes.GRASSLAND)
+    var brushRadius by mutableStateOf(30f)     // в единицах
+
+    private var stroke: HashMap<Cell, Biomes?>? = null         // мазок кисти, пока он идёт
+    private var secondaryDown = false          // последнее нажатие было ПКМ: жест двигает карту
     private var ignoreDrag = false                  // после Esc игнорируем остаток жеста, пока не отпустят кнопку
-    private var lastPress = Offset.Zero             // где нажали кнопку: по этому месту выбираем точку
+                   // где нажали кнопку: по этому месту выбираем точку
     private var waterEdit: Pair<Float, Float>? = null    // вода реки до начала движения ползунка
 
-    // Что-то уже идёт: перетаскивание, решение по маленькой клетке или вопрос по реке.
-    val busy: Boolean get() = drag != null || shapeDrag != null || pending != null || riverPrompt != null
+    // Что-то уже идёт: перетаскивание, мазок, решение по маленькой клетке или вопрос по реке.
+    val busy: Boolean get() = drag != null || shapeDrag != null || pending != null || riverPrompt != null || stroke != null
+    var openPrompt by mutableStateOf(false)
+    var closePrompt by mutableStateOf(false)
+    var menuPrompt by mutableStateOf(false)
 
     // ---- Слои ----
 
@@ -101,6 +116,7 @@ class MapState(
             selectedShape = null
             addingLake = false
             addingRiver = false
+            biomeMode = false
         }
         message = null
     }
@@ -108,12 +124,33 @@ class MapState(
     fun toggleAddingLake() {
         addingLake = !addingLake
         addingRiver = false
+        biomeMode = false
         requestFocus()
     }
 
     fun toggleAddingRiver() {
         addingRiver = !addingRiver
         addingLake = false
+        biomeMode = false
+        requestFocus()
+    }
+
+    fun toggleBiomeMode() {
+        if (busy || blockedByDirtyRiver(null)) return
+        biomeMode = !biomeMode
+        if (biomeMode) {
+            selectedCell = null
+            selectedShape = null
+            addingLake = false
+            addingRiver = false
+            if (LAYERS.BIOMES !in layers) toggleLayer(LAYERS.BIOMES)   // чтобы было видно, что красим
+        }
+        message = null
+        requestFocus()
+    }
+
+    fun selectBrushBiome(biome: Biomes) {
+        brushBiome = biome
         requestFocus()
     }
 
@@ -241,6 +278,7 @@ class MapState(
             }
             Key.Delete -> if (editModeState) { deleteSelectedShape(); true } else false
             Key.Z -> if (ctrl) { if (event.isShiftPressed) redoEdit() else undoEdit(); true } else false
+            Key.S -> if (ctrl) { save(askName = event.isShiftPressed); true } else false
             Key.Y -> if (ctrl) { redoEdit(); true } else false
             Key.Escape -> { onEscape(); true }
             else -> false
@@ -253,6 +291,10 @@ class MapState(
         val currentPending = pending
         when {
             riverPrompt != null -> Unit               // ответить надо кнопками
+            stroke != null -> {                       // уже закрашенное остаётся и пишется в историю
+                finishStroke()
+                ignoreDrag = true
+            }
             currentDrag != null -> {                  // Esc во время перетаскивания отменяет правку
                 editor.cancel(currentDrag)
                 drag = null
@@ -271,10 +313,26 @@ class MapState(
                 addingRiver = false
                 message = null
             }
+            biomeMode -> biomeMode = false
             selectedShape != null -> if (!blockedByDirtyRiver(null)) selectedShape = null
             selectedCell != null -> selectedCell = null
             else -> setEditMode(false)
         }
+    }
+
+    // ---- Биомы ----
+
+    private fun paintAt(position: Offset) {
+        val s = stroke ?: return
+        biomeEditor.paint(
+            picker.worldX(position.x), picker.worldY(position.y),
+            brushRadius, brushBiome, s, levelForScale(camera.scale)
+        )
+    }
+
+    private fun finishStroke() {
+        stroke?.let { biomeEditor.finish(it, brushBiome) }
+        stroke = null
     }
 
     // ---- Перетаскивание ----
@@ -283,8 +341,19 @@ class MapState(
         lastPress = position
     }
 
+    fun onPointerPress(isSecondary: Boolean, position: Offset) {
+        secondaryDown = isSecondary
+        if (isSecondary) onSecondaryPress(position)
+    }
+
     fun onDragStart(start: Offset) {
         ignoreDrag = false
+        if (editModeState && biomeMode && riverPrompt == null) {
+            if (secondaryDown) return          // ПКМ: двигаем карту
+            stroke = HashMap()
+            paintAt(start)
+            return
+        }
         if (!editModeState || pending != null || riverPrompt != null) return
         val shape = selectedShape
         val cell = selectedCell
@@ -304,9 +373,11 @@ class MapState(
         val currentShape = shapeDrag
         when {
             ignoreDrag -> Unit
+            stroke != null -> paintAt(position)
             current != null -> editor.move(current, picker.worldX(position.x), picker.worldY(position.y))
             currentShape != null -> shapeEditor.move(currentShape, picker.worldX(position.x), picker.worldY(position.y))
             else -> {
+                if (secondaryDown) return
                 camera.centerX -= dragAmount.x / camera.scale
                 camera.centerY += dragAmount.y / camera.scale
             }
@@ -315,6 +386,7 @@ class MapState(
 
     fun onDragEnd() {
         ignoreDrag = false
+        finishStroke()
         val current = drag
         if (current != null) {
             drag = null
@@ -337,6 +409,7 @@ class MapState(
 
     fun onDragCancel() {
         ignoreDrag = false
+        finishStroke()
         drag?.let { editor.cancel(it) }
         drag = null
         shapeDrag?.let { shapeEditor.cancel(it) }
@@ -349,6 +422,13 @@ class MapState(
         if (!editModeState) return
         if (riverPrompt != null) {
             message = "Сначала примените изменения реки или отмените их."
+            return
+        }
+        if (biomeMode) {
+            if (secondaryDown) return
+            stroke = HashMap()
+            paintAt(tap)
+            finishStroke()
             return
         }
         val x = picker.worldX(tap.x)
@@ -386,7 +466,7 @@ class MapState(
         if (blockedByDirtyRiver(null)) return
         selectedShape =
             if (addingLake) shapeEditor.addLake(x, y, 30f / camera.scale)
-            else shapeEditor.addRiver(x, y, 40f / camera.scale)
+            else shapeEditor.addRiver(x, y, 40f / camera.scale, params.riverThreshold)
         addingLake = false
         addingRiver = false
         selectedCell = null
@@ -396,7 +476,7 @@ class MapState(
     // Клик по линии кривой выбранной клетки добавляет точку.
     private fun tryAddCurvePoint(tap: Offset): Boolean {
         val selected = selectedCell ?: return false
-        if (camera.scale < CURVE_HANDLES_MIN_SCALE || picker.findHandle(selected, tap) != null) return false
+        if (camera.scale < (CURVE_HANDLES_MIN_SCALE) || picker.findHandle(selected, tap) != null) return false
         val hit = picker.findSegment(selected, tap) ?: return false
         editor.addCurvePoint(hit.edge, hit.segment, hit.x, hit.y)
         message = null
@@ -442,5 +522,111 @@ class MapState(
             is Handle.MainPoint -> message = "Нельзя удалять основные точки клетки"
             null -> Unit
         }
+    }
+
+    // ---- Наведение ----
+
+    fun onHover(position: Offset) {
+        hoverPosition = position
+        hoverCell = if (LAYERS.CONTEXT_HINT in layers)
+            cellIndex.findCell(picker.worldX(position.x), picker.worldY(position.y)) else null
+    }
+
+    fun onHoverExit() {
+        hoverCell = null
+    }
+
+    fun onSecondaryDrag(delta: Offset) {
+        if (!editModeState || !biomeMode) return
+        camera.centerX -= delta.x / camera.scale
+        camera.centerY += delta.y / camera.scale
+    }
+
+    var file: File? = startFile            // куда сохранять; null: ещё не сохраняли
+
+    fun save(askName: Boolean = false): Boolean {
+        if (busy) return false
+        if (editor.dirtyRiver() != null) {
+            message = "Сначала примените изменения реки или отмените их."
+            return false
+        }
+        val target = (if (askName) null else file) ?: chooseFile("Сохранить карту", save = true) ?: return false
+        SaveFile(params, steps, editor.savedEdits()).write(target)
+        editor.markSaved()
+        file = target
+        message = "Сохранено: ${target.name}"
+        requestFocus()
+        return true
+    }
+
+
+    fun open() {
+        if (busy) return
+        if (editor.dirtyRiver() != null) {
+            message = "Сначала примените изменения реки или отмените их."
+            return
+        }
+        if (editor.isDirty) {
+            openPrompt = true
+            return
+        }
+        chooseAndOpen()
+    }
+
+    fun saveAndOpen() {
+        openPrompt = false
+        if (save()) chooseAndOpen()
+    }
+
+    fun openWithoutSaving() {
+        openPrompt = false
+        chooseAndOpen()
+    }
+
+    fun cancelOpen() {
+        openPrompt = false
+        requestFocus()
+    }
+
+    private fun chooseAndOpen() {
+        val chosen = chooseFile("Открыть карту", save = false) ?: return
+        onOpen(chosen)
+    }
+
+
+
+    fun saveAndExit(exit: () -> Unit, cancel: () -> Unit) {
+        closePrompt = false
+        if (save()) exit() else cancel()
+    }
+
+    fun cancelClose(cancel: () -> Unit) {
+        closePrompt = false
+        cancel()
+        requestFocus()
+    }
+
+    fun toMenu() {
+        if (busy) return
+        if (editor.dirtyRiver() != null) {
+            message = "Сначала примените изменения реки или отмените их."
+            return
+        }
+        if (editor.isDirty) menuPrompt = true else onMenu()
+    }
+
+    fun saveAndToMenu() {
+        menuPrompt = false
+        if (save()) onMenu()
+    }
+
+    fun toMenuWithoutSaving() {
+        menuPrompt = false
+        onMenu()
+    }
+
+    fun cancelMenu() {
+        menuPrompt = false
+        requestFocus()
     }
 }

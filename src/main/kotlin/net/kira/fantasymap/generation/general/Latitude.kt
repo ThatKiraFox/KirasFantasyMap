@@ -4,11 +4,9 @@ import net.kira.fantasymap.model.mapgrid.MapGrid
 
 private const val MAX_LATITUDE_DEGREES = 90
 
-fun assignLatitude(grid: MapGrid, worldHeight: Float) {
+fun assignLatitude(grid: MapGrid, worldHeight: Float, latitudeFrom: Float, latitudeTo: Float) {
     for (cell in grid.cells) {
         val y = cell.getCenter().second
-        // 0 → -90°, середина → 0°, max → +90°
-        val latitude = (y / worldHeight) * 180.0f - MAX_LATITUDE_DEGREES
-        cell.updateLatitude(latitude)
+        cell.updateLatitude(latitudeFrom + (y / worldHeight) * (latitudeTo - latitudeFrom))
     }
 }

@@ -1,8 +1,9 @@
 package net.kira.fantasymap.generation.hydrology
 
 import net.kira.fantasymap.model.mapgrid.Cell
-import net.kira.fantasymap.model.pointshape.Lake
 import net.kira.fantasymap.model.mapgrid.MapGrid
+import net.kira.fantasymap.model.pointshape.Lake
+import kotlin.collections.get
 import kotlin.math.PI
 import kotlin.math.abs
 import kotlin.math.atan2
@@ -12,21 +13,19 @@ import kotlin.math.sin
 import kotlin.math.sqrt
 import kotlin.random.Random
 
-private const val LAKE_HEIGHT_DIFFERENCE = 30     // соседи ниже этой разницы высот с ямой тоже становятся озером
-private const val LAKE_MIN_MOISTURE = 0.25f
+private const val LAKE_HEIGHT_DIFFERENCE = 20     // соседи ниже этой разницы высот с ямой тоже становятся озером
+private const val LAKE_MIN_SHARE = 0.3f           // радиус озера при moisture 0, в долях радиуса круга, равного клетке по площади
+private const val LAKE_MAX_SHARE = 0.8f           // то же при moisture 1
+private const val LAKE_POINTS = 32
+private const val LAKE_WOBBLE = 0.15f             // на сколько радиус в точке может отличаться от среднего
+private const val LAKE_REACH = 1.1f               // докуда тянется озеро к соседнему: доля расстояния до общей точки (больше 1: озёра немного заходят друг на друга)
+private const val LAKE_NECK_ANGLE = 0.5f          // ширина перемычки в радианах в каждую сторону от направления на соседа
 
 // Яма: клетка суши, у которой все соседи выше неё.
-private const val LAKE_MIN_SHARE = 0.3f
-private const val LAKE_MAX_SHARE = 0.8f
-private const val LAKE_POINTS = 32
-private const val LAKE_WOBBLE = 0.15f
-private const val LAKE_REACH = 1.1f
-private const val LAKE_NECK_ANGLE = 0.5f
-
-fun assignLakes(grid: MapGrid) {
+fun assignLakes(grid: MapGrid, lakeMinMoisture: Float) {
     var pits = 0
     for (cell in grid.cells) {
-        if (cell.height <= 0 || cell.moisture < LAKE_MIN_MOISTURE) continue
+        if (cell.height <= 0 || cell.moisture < lakeMinMoisture) continue
         val neighbors = cell.edges.mapNotNull { it.otherCell(cell) }
         if (neighbors.any { it.height <= cell.height }) continue
         pits++
@@ -49,10 +48,10 @@ fun createLakes(grid: MapGrid) {
             if (around.size < 3 || around.any { !it.isLake || it.isRemoved }) continue
             if (around.minOf { it.id } != cell.id) continue          // каждую вершину один раз
             val centers = around.map { it.getCenter() }.sortedBy { atan2(it.second - corner.y, it.first - corner.x) }
-            grid.lakes.add(Lake(FloatArray(centers.size * 2) { if (it % 2 == 0) centers[it / 2].first else centers[it / 2].second }))
+            grid.addLake(Lake(FloatArray(centers.size * 2) { if (it % 2 == 0) centers[it / 2].first else centers[it / 2].second }))
         }
 
-        grid.lakes.add(Lake(blobPoints(cell)))
+        grid.addLake(Lake(blobPoints(cell)))
     }
     println("lakes: ${grid.lakes.size}")
 }
@@ -79,7 +78,7 @@ private fun blobPoints(cell: Cell): FloatArray {
             while (diff > pi) diff -= 2f * pi
             while (diff < -pi) diff += 2f * pi
             if (abs(diff) >= LAKE_NECK_ANGLE || reach <= radii[i]) continue
-            val t = cos(diff / LAKE_NECK_ANGLE * pi / 2f).let { it * it }
+            val t = cos(diff / LAKE_NECK_ANGLE * pi / 2f).let { it * it }     // 1 по направлению на соседа, плавно до 0 по краям
             radii[i] += (reach - radii[i]) * t
         }
     }

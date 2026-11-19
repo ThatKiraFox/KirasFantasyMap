@@ -1,5 +1,6 @@
 package net.kira.fantasymap.generation.hydrology
 
+import net.kira.fantasymap.generation.general.coefficient
 import net.kira.fantasymap.imported.FastNoiseLite
 import net.kira.fantasymap.model.mapgrid.MapGrid
 import kotlin.math.abs
@@ -25,7 +26,7 @@ fun baseMoisture(latitude: Float): Double {
     return base.coerceAtLeast(0.0).pow(0.85).coerceIn(0.05, 1.0)
 }
 
-fun assignMoisture(grid: MapGrid, worldWidth: Float, worldHeight: Float, seed: Long) {
+fun assignMoisture(grid: MapGrid, worldWidth: Float, worldHeight: Float, seed: Long, humidity: Float) {
     val noise = FastNoiseLite(seed.toInt()).apply {
         SetNoiseType(FastNoiseLite.NoiseType.OpenSimplex2)
         SetFractalType(FastNoiseLite.FractalType.FBm)
@@ -90,7 +91,9 @@ fun assignMoisture(grid: MapGrid, worldWidth: Float, worldHeight: Float, seed: L
 
             val distance = if (n > 0) sumDistance / n else 1f
             val slope = if (n > 0) (smooth[cell.id] - sumHeight / n) / distance * strength else 0f
-            val rate = (RAIN + OROGRAPHIC * slope).coerceIn(RAIN * 0.3f, RAIN * 3f)
+            val rain1 = RAIN / coefficient
+            val rain0 = rain1 / humidity
+            val rate = (rain0 + OROGRAPHIC * slope).coerceIn(rain0 * 0.3f, rain0 * 3f)
             val rain = 1f - exp(-rate * distance)
 
             val noiseFactor = 1f + MOISTURE_NOISE_STRENGTH * noise.GetNoise(
@@ -98,7 +101,7 @@ fun assignMoisture(grid: MapGrid, worldWidth: Float, worldHeight: Float, seed: L
                 centerY[cell.id] / worldSize * MOISTURE_NOISE_FREQUENCY
             )
             // на ровном месте rate = RAIN, и влажность равна incoming; на подъёме больше, на спуске меньше
-            cell.moisture = (incoming * rate / RAIN * temperatureFactor(cell.temperature) * noiseFactor).coerceIn(0.05f, 1f)
+            cell.moisture = (incoming * rate / rain0 * temperatureFactor(cell.temperature) * noiseFactor).coerceIn(0.05f, 1f)
             carried[cell.id] = incoming * (1f - rain)
         }
     }

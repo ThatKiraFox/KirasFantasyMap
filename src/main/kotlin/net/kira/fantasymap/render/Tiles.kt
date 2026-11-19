@@ -11,7 +11,6 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
-import net.kira.fantasymap.generation.hydrology.RIVER_THRESHOLD
 import net.kira.fantasymap.generation.hydrology.riverWidth
 import net.kira.fantasymap.model.Biomes
 import net.kira.fantasymap.model.mapgrid.Cell
@@ -26,11 +25,14 @@ import kotlin.math.floor
 import kotlin.math.log2
 import kotlin.math.pow
 import kotlin.math.roundToInt
+import androidx.compose.ui.graphics.asSkiaBitmap
+import net.kira.fantasymap.generation.general.POPULATION_COUNT
+import org.jetbrains.skia.Image as SkiaImage
 
 const val TILE_SIZE = 512
 const val BASE_SCALE = 0.05f                       // масштаб нулевого уровня, равен минимальному масштабу камеры
 const val MAX_LEVEL = 12
-private const val MAX_CACHED_TILES = 120
+private const val MAX_CACHED_TILES = 40
 private const val PINNED_LEVELS = 3                // уровни 0..3 рисуются при запуске и не вытесняются
 private const val CURVES_MIN_PIXELS_PER_UNIT = 1.5f    // ниже этого масштаба детали кривых меньше пикселя
 private const val BIG_TILE_SHARE_OF_WORLD = 0.1f       // у плиток крупнее этой доли мира перебираем все клетки, а не берём из индекса
@@ -50,19 +52,23 @@ class TileCache(
     private val scope: CoroutineScope,
     private val worldWidth: Float,
     private val worldHeight: Float,
-    private val maxHeight: Int
+    private val maxHeight: Int,
+    private val riverThreshold: Float
 ) {
-    private val tiles = object : LinkedHashMap<TileKey, ImageBitmap>(128, 0.75f, true) {
-        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<TileKey, ImageBitmap>?): Boolean =
+    private val tiles = object : LinkedHashMap<TileKey, SkiaImage>(128, 0.75f, true) {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<TileKey, SkiaImage>?): Boolean =
             size > MAX_CACHED_TILES
     }
-    private val pinnedTiles = HashMap<TileKey, ImageBitmap>()      // нижние уровни, не вытесняются
+    private val pinnedTiles = HashMap<TileKey, SkiaImage>()        // нижние уровни, не вытесняются
     private val pending = HashSet<TileKey>()                       // плитки, которые сейчас рисуются
     private val outdated = HashSet<TileKey>()                      // плитки, которые правка задела, пока они рисовались
+
     private val gridLock = ReentrantReadWriteLock()
 
-    @Volatile var layers: Set<LAYERS> = setOf(LAYERS.LAKES, LAYERS.RIVERS)
+    @Volatile var layers: Set<LAYERS> = setOf(LAYERS.LAKES, LAYERS.RIVERS, LAYERS.CONTEXT_HINT)
         private set
+
+    fun <T> editingGrid(action: () -> T): T = gridLock.write(action)
 
     fun setLayers(value: Set<LAYERS>, level: Int, minX: Float, minY: Float, maxX: Float, maxY: Float) {
         layers = value
@@ -70,10 +76,9 @@ class TileCache(
             if (key.level == level && touches(key, minX, minY, maxX, maxY)) request(key, force = true)
             else { tiles.remove(key); pinnedTiles.remove(key) }
         }
-        for (key in pending.toList()) outdated.add(key)       // то, что уже рисуется со старыми слоями, дорисуем заново
+        for (key in pending.toList()) outdated.add(key)
     }
 
-    // Нижние уровни заказываем после видимых плиток, чтобы они не отнимали у них ядра.
     fun prerenderLowLevels() {
         for (level in 0..PINNED_LEVELS) {
             val tileWorldSize = TILE_SIZE / pixelsPerUnit(level)
@@ -85,21 +90,26 @@ class TileCache(
         }
     }
 
-    fun peek(key: TileKey): ImageBitmap? =
+    // Только смотрит в кэш, ничего не запрашивает.
+    fun peek(key: TileKey): SkiaImage? =
         if (key.level <= PINNED_LEVELS) pinnedTiles[key] else tiles[key]
 
-    fun get(key: TileKey): ImageBitmap? {
+    // Готовую плитку возвращает сразу, иначе ставит её рисоваться в фоне и возвращает null.
+    fun get(key: TileKey): SkiaImage? {
         val ready = peek(key)
         if (ready == null) request(key, force = false)
         return ready
     }
 
-    fun invalidate(minX: Float, minY: Float, maxX: Float, maxY: Float) {
+    // onlyLevel: перерисовать только плитки этого уровня (для быстрых правок вроде кисти).
+    fun invalidate(minX: Float, minY: Float, maxX: Float, maxY: Float, onlyLevel: Int? = null) {
         val cachedKeys = tiles.keys.toList() + pinnedTiles.keys
         for (key in cachedKeys) {
+            if (onlyLevel != null && key.level != onlyLevel) continue
             if (touches(key, minX, minY, maxX, maxY)) request(key, force = true)
         }
         for (key in pending.toList()) {
+            if (onlyLevel != null && key.level != onlyLevel) continue
             if (touches(key, minX, minY, maxX, maxY)) outdated.add(key)
         }
     }
@@ -111,10 +121,13 @@ class TileCache(
         }
         scope.launch {
             val currentLayers = layers
-            val bitmap = withContext(Dispatchers.Default) {
-                gridLock.read { renderTile(grid, cellIndex, key, worldWidth, worldHeight, maxHeight, currentLayers) }
+            val image = withContext(Dispatchers.Default) {
+                val bitmap = gridLock.read { renderTile(grid, cellIndex, key, worldWidth, worldHeight, maxHeight, currentLayers, riverThreshold) }
+                val skia = bitmap.asSkiaBitmap()
+                skia.setImmutable()
+                SkiaImage.makeFromBitmap(skia)
             }
-            if (key.level <= PINNED_LEVELS) pinnedTiles[key] = bitmap else tiles[key] = bitmap
+            if (key.level <= PINNED_LEVELS) pinnedTiles[key] = image else tiles[key] = image
             pending.remove(key)
             if (outdated.remove(key)) request(key, force = false)
         }
@@ -126,11 +139,9 @@ class TileCache(
         val tileMinY = key.row * size
         return tileMinX <= maxX && tileMinX + size >= minX && tileMinY <= maxY && tileMinY + size >= minY
     }
-
-    fun <T> editingGrid(action: () -> T): T = gridLock.write(action)
 }
 
-fun renderTile(grid: MapGrid, cellIndex: CellIndex, key: TileKey, worldWidth: Float, worldHeight: Float, maxHeight: Int, layers: Set<LAYERS>): ImageBitmap {
+fun renderTile(grid: MapGrid, cellIndex: CellIndex, key: TileKey, worldWidth: Float, worldHeight: Float, maxHeight: Int, layers: Set<LAYERS>, riverThreshold: Float): ImageBitmap {
     val pixelsPerWorldUnit = pixelsPerUnit(key.level)
     val tileWorldSize = TILE_SIZE / pixelsPerWorldUnit
     val minX = key.column * tileWorldSize
@@ -162,7 +173,8 @@ fun renderTile(grid: MapGrid, cellIndex: CellIndex, key: TileKey, worldWidth: Fl
             }
             path.close()
             val color = when {
-                cell.height <= 0 && LAYERS.BIOMES !in layers -> waterColor(cell.height)           // море всегда
+                cell.height <= 0 && LAYERS.BIOMES !in layers -> waterColor(cell.height) // море всегда
+                LAYERS.POPULATION in layers -> populationColor(cell, grid.maxPopulationDensity)
                 LAYERS.BIOMES in layers -> biomesColor(cell.biome!!)                   // когда появятся биомы
                 LAYERS.MOISTURE in layers -> moistureColor(cell.moisture)
                 LAYERS.HEIGHT in layers -> heightColor(cell.height, maxHeight)
@@ -190,7 +202,7 @@ fun renderTile(grid: MapGrid, cellIndex: CellIndex, key: TileKey, worldWidth: Fl
                 path.lineTo((edge.end.x - minX) * pixelsPerWorldUnit, (maxY - edge.end.y) * pixelsPerWorldUnit)
                 drawPath(
                     path, riverColor,
-                    style = Stroke(width = riverWidth(edge.riverWater) * pixelsPerWorldUnit, cap = StrokeCap.Round, join = StrokeJoin.Round)
+                    style = Stroke(width = riverWidth(edge.riverWater, riverThreshold) * pixelsPerWorldUnit, cap = StrokeCap.Round, join = StrokeJoin.Round)
                 )
             }
         }
@@ -205,7 +217,7 @@ fun renderTile(grid: MapGrid, cellIndex: CellIndex, key: TileKey, worldWidth: Fl
                 for (i in 1 until points.size / 2) {
                     path.lineTo((points[2 * i] - minX) * pixelsPerWorldUnit, (maxY - points[2 * i + 1]) * pixelsPerWorldUnit)
                 }
-                val widthPixels = (riverWidth(river.startWater) + riverWidth(river.endWater)) / 2f * pixelsPerWorldUnit
+                val widthPixels = (riverWidth(river.startWater, riverThreshold) + riverWidth(river.endWater, riverThreshold)) / 2f * pixelsPerWorldUnit
                 drawPath(
                     path, riverColor.copy(alpha = widthPixels.coerceIn(THIN_RIVER_MIN_ALPHA, 1f)),
                     style = Stroke(width = maxOf(widthPixels, 1f), cap = StrokeCap.Round, join = StrokeJoin.Round)
@@ -289,7 +301,8 @@ fun biomesColor(biome: Biomes): Color = when (biome) {
 fun moistureColor(moisture: Float): Color =
     lerp(Color.Red, Color.Green, ((moisture - 0.05f) / 0.95f).coerceIn(0f, 1f))
 
-
-fun testColor(cellValue: Float, cellHeight: Int): Color =
-    if (cellHeight < 0) {Color.Black}
-    else lerp(Color(162, 186, 229, 255), Color(3, 9, 68, 255), (cellValue / RIVER_THRESHOLD).coerceIn(0f, 1f))
+fun populationColor(cell: Cell, maxDensity: Float): Color {
+    if (maxDensity <= 0f) return Color.Red
+    val density = cell.population / cell.area()
+    return lerp(Color.Red, Color.Green, (density / maxDensity).coerceIn(0f, 1f))
+}

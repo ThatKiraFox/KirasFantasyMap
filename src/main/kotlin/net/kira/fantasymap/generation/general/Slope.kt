@@ -19,5 +19,5 @@ fun slope(cell: Cell): Float {
         sum += abs(other.height - cell.height) / distance
         n++
     }
-    return if (n > 0) sum / n else 0f
+    return if (n > 0) sum / n * coefficient else 0f
 }

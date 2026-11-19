@@ -30,6 +30,7 @@ class Cell(val id: Int) {
     var isLake: Boolean = false
     var biome: Biomes? = null
     var depth: Int = 0
+    var population: Int = 0
 
     var isRemoved = false
 

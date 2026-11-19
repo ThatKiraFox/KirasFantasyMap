@@ -1,5 +1,6 @@
 package net.kira.fantasymap.generation.hydrology
 
+import net.kira.fantasymap.generation.general.coefficient
 import net.kira.fantasymap.model.mapgrid.Cell
 import net.kira.fantasymap.model.mapgrid.MapGrid
 import java.util.PriorityQueue
@@ -11,7 +12,7 @@ const val RIVER_THRESHOLD = 50f                // с какого количес
 
 
 // Возвращает клетки в порядке обхода от океана вглубь суши: у каждой клетки её flowsTo стоит раньше неё.
-fun assignRivers(grid: MapGrid, maxHeight: Int): List<Cell> {
+fun assignRivers(grid: MapGrid, maxHeight: Int, riverThreshold: Float): List<Cell> {
     val land = grid.cells.filter { it.height > 0 }
     for (cell in land) {
         val snow = if (cell.temperature < 0f) SNOW * cell.height / maxHeight else 0f
@@ -22,7 +23,7 @@ fun assignRivers(grid: MapGrid, maxHeight: Int): List<Cell> {
     // level: высота, до которой клетка заполнена (в яме она выше собственной высоты).
     val level = IntArray(grid.cells.size)
     val visited = BooleanArray(grid.cells.size)
-    val queue = PriorityQueue<Cell>(compareBy<Cell>({ level[it.id] }, { it.height }))
+    val queue = PriorityQueue(compareBy<Cell>({ level[it.id] }, { it.height }))
     val isOcean = findOcean(grid)
     for (cell in grid.cells) {
         cell.flowsTo = null
@@ -50,7 +51,7 @@ fun assignRivers(grid: MapGrid, maxHeight: Int): List<Cell> {
     // С конца: сначала клетки выше по течению, потом те, куда они втекают.
     for (cell in order.asReversed()) cell.flowsTo?.let {
         it.water += cell.water }
-    println("river cells: ${land.count { it.water >= RIVER_THRESHOLD }}")
+    println("river cells: ${land.count { it.water >= riverThreshold }}")
 
     return order
 }
@@ -81,4 +82,4 @@ fun findOcean(grid: MapGrid): BooleanArray {
     return isOcean
 }
 
-fun riverWidth(water: Float): Float = 0.1f + 0.4f * ln(1f + water / RIVER_THRESHOLD)   // в единицах мира
+fun riverWidth(water: Float, riverThreshold: Float): Float = (0.1f + 0.4f * ln(1f + water / riverThreshold)) * coefficient

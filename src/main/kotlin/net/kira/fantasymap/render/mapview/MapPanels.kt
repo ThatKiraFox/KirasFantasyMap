@@ -1,20 +1,38 @@
 package net.kira.fantasymap.render.mapview
 
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.material.AlertDialog
 import androidx.compose.material.Button
 import androidx.compose.material.Slider
 import androidx.compose.material.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import net.kira.fantasymap.editors.PendingEdit
+import net.kira.fantasymap.model.Biomes
+import net.kira.fantasymap.model.mapgrid.Cell
 import net.kira.fantasymap.model.pointshape.Lake
 import net.kira.fantasymap.model.pointshape.River
-import net.kira.fantasymap.render.*
+import net.kira.fantasymap.render.LAYERS
+import net.kira.fantasymap.render.biomesColor
+import net.kira.fantasymap.render.errorTextBackground
+import net.kira.fantasymap.render.errorTextColor
+import net.kira.fantasymap.render.standardTextBackground
+import net.kira.fantasymap.render.standardTextColor
 import kotlin.math.ln
 import kotlin.math.pow
 import kotlin.math.roundToInt
+import kotlin.text.iterator
 
 private const val WATER_MIN = 10f                    // границы ползунков воды реки
 private const val WATER_MAX = 100_000f
@@ -47,6 +65,51 @@ fun LayersPanel(state: MapState) {
                         Spacer(Modifier.width(4.dp))
                     }
                 }
+            }
+        }
+    }
+}
+
+// Текст подсказки по клетке. Порядок как в цвете клетки в renderTile. null: слоёв со значением нет.
+private fun contextHint(cell: Cell, layers: Set<LAYERS>): String? = when {
+    LAYERS.POPULATION in layers -> "Население ${cell.population}"
+    LAYERS.BIOMES in layers -> cell.biome?.name
+    cell.height <= 0 -> "Высота ${cell.height}"
+    LAYERS.MOISTURE in layers -> "Влажность %.2f".format(cell.moisture)
+    LAYERS.HEIGHT in layers -> "Высота ${cell.height}"
+    else -> null
+}
+
+@Composable
+fun ContextHint(state: MapState) {
+    if (LAYERS.CONTEXT_HINT !in state.layers) return
+    val cell = state.hoverCell ?: return
+    val text = contextHint(cell, state.layers) ?: return
+    val position = state.hoverPosition
+    Box(Modifier.offset { IntOffset(position.x.roundToInt() + 16, position.y.roundToInt() + 16) }) {
+        PanelText(text)
+    }
+}
+
+@Composable
+private fun BiomePanel(state: MapState) {
+    Spacer(Modifier.height(4.dp))
+    PanelText("Кисть: радиус ${state.brushRadius.roundToInt()}. ПКМ + перетаскивание двигает карту.")
+    Slider(
+        value = state.brushRadius,
+        valueRange = 3f..200f,
+        onValueChange = { state.brushRadius = it },
+        modifier = Modifier.width(220.dp)
+    )
+    for (row in Biomes.values().toList().chunked(4)) {
+        Row {
+            for (biome in row) {
+                Button(onClick = { state.selectBrushBiome(biome) }) {
+                    Box(Modifier.size(12.dp).background(biomesColor(biome)))
+                    Spacer(Modifier.width(4.dp))
+                    Text((if (biome == state.brushBiome) "✓ " else "") + biome.name)
+                }
+                Spacer(Modifier.width(4.dp))
             }
         }
     }
@@ -90,7 +153,10 @@ fun EditPanel(state: MapState) {
                 Button(onClick = { state.toggleAddingRiver() }) { Text(if (state.addingRiver) "Отмена (Esc)" else "Добавить реку") }
                 Spacer(Modifier.width(8.dp))
                 Button(enabled = state.selectedShape != null, onClick = { state.deleteSelectedShape() }) { Text("Удалить (Delete)") }
+                Spacer(Modifier.width(8.dp))
+                Button(onClick = { state.toggleBiomeMode() }) { Text(if (state.biomeMode) "Биомы: ВКЛ" else "Биомы") }
             }
+            if (state.biomeMode) BiomePanel(state)
         }
     }
 }
@@ -137,6 +203,7 @@ private fun hintText(state: MapState): String {
     val zoomedIn = state.camera.scale >= (CURVE_HANDLES_MIN_SCALE)
     return when {
         state.riverPrompt != null -> "Примените изменения реки к клеткам или отмените их."
+        state.biomeMode -> "Выберите биом и красьте клетки. Esc — выйти."
         currentPending != null -> pendingHint(currentPending, state.averageCellArea)
         state.addingLake -> "Кликните по карте, где поставить озеро. Esc — отмена."
         state.addingRiver -> "Кликните по карте, где поставить реку. Esc — отмена."
@@ -162,4 +229,52 @@ private fun pendingHint(pending: PendingEdit, averageCellArea: Float): String {
         "Клетка №${small.id} стала слишком маленькой ($percent% от средней). " +
                 "Кликните по подсвеченной соседней клетке, чтобы объединить с ней, или оставьте как есть."
     }
+}
+
+@Composable
+fun OpenPrompt(state: MapState) {
+    AlertDialog(
+        onDismissRequest = { state.cancelOpen() },
+        text = { Text("Есть несохранённые изменения. Сохранить перед открытием другой карты?") },
+        confirmButton = { Button(onClick = { state.saveAndOpen() }) { Text("Сохранить и открыть") } },
+        dismissButton = {
+            Row {
+                Button(onClick = { state.openWithoutSaving() }) { Text("Не сохранять") }
+                Spacer(Modifier.width(8.dp))
+                Button(onClick = { state.cancelOpen() }) { Text("Отмена") }
+            }
+        }
+    )
+}
+
+@Composable
+fun ClosePrompt(state: MapState, onCancelClose: () -> Unit, onExit: () -> Unit) {
+    AlertDialog(
+        onDismissRequest = { state.cancelClose(onCancelClose) },
+        text = { Text("Есть несохранённые изменения. Сохранить перед выходом?") },
+        confirmButton = { Button(onClick = { state.saveAndExit(onExit, onCancelClose) }) { Text("Сохранить и выйти") } },
+        dismissButton = {
+            Row {
+                Button(onClick = onExit) { Text("Не сохранять") }
+                Spacer(Modifier.width(8.dp))
+                Button(onClick = { state.cancelClose(onCancelClose) }) { Text("Отмена") }
+            }
+        }
+    )
+}
+
+@Composable
+fun MenuPrompt(state: MapState) {
+    AlertDialog(
+        onDismissRequest = { state.cancelMenu() },
+        text = { Text("Есть несохранённые изменения. Сохранить перед выходом в меню?") },
+        confirmButton = { Button(onClick = { state.saveAndToMenu() }) { Text("Сохранить и выйти") } },
+        dismissButton = {
+            Row {
+                Button(onClick = { state.toMenuWithoutSaving() }) { Text("Не сохранять") }
+                Spacer(Modifier.width(8.dp))
+                Button(onClick = { state.cancelMenu() }) { Text("Отмена") }
+            }
+        }
+    )
 }

@@ -1,7 +1,7 @@
 package net.kira.fantasymap.generation.hydrology
 
-import net.kira.fantasymap.generation.CellValidator
 import net.kira.fantasymap.editors.MergeCells
+import net.kira.fantasymap.generation.CellValidator
 import net.kira.fantasymap.model.mapgrid.Cell
 import net.kira.fantasymap.model.mapgrid.CellIndex
 import net.kira.fantasymap.model.mapgrid.Edge
@@ -12,6 +12,8 @@ import kotlin.math.abs
 import kotlin.math.hypot
 import kotlin.math.sqrt
 import kotlin.random.Random
+import kotlin.text.compareTo
+import kotlin.text.get
 
 private const val MIN_AREA_FACTOR = 0.2f        // как в редакторе
 private const val AREA_TOLERANCE = 0.001f       // доля площади исходной клетки: на сколько может разойтись сумма площадей половинок
@@ -26,9 +28,9 @@ class RiverStep(val from: Vertex, val to: Vertex, val edges: List<Edge>, val cut
 private class CutResult(val created: Cell?, val edges: List<Edge>, val cut: Edge?)
 
 // Возвращает шаги рек: для каждой речной клетки, текущей в сушу, что сделано в клетке, куда она течёт.
-fun cutRivers(grid: MapGrid, order: List<Cell>, worldWidth: Float, worldHeight: Float, random: Random): Map<Cell, RiverStep> {
+fun cutRivers(grid: MapGrid, order: List<Cell>, worldWidth: Float, worldHeight: Float, random: Random, riverThreshold: Float): Map<Cell, RiverStep> {
     val averageArea = worldWidth * worldHeight / grid.cells.size
-    val riverCells = order.asReversed().filter { it.flowsTo != null && it.water >= RIVER_THRESHOLD }   // от истоков к устьям
+    val riverCells = order.asReversed().filter { it.flowsTo != null && it.water >= (riverThreshold) }   // от истоков к устьям
 
     // 1. Угол, через который река выходит из каждой клетки.
     val exit = arrayOfNulls<Vertex>(grid.cells.size)
@@ -46,7 +48,7 @@ fun cutRivers(grid: MapGrid, order: List<Cell>, worldWidth: Float, worldHeight: 
     }
 
     // 2. Разрезы: каждый приток режет клетку, в которую втекает.
-    val pieces = HashMap<Cell, ArrayList<Cell>>()
+    val pieces = LinkedHashMap<Cell, ArrayList<Cell>>()     // порядок обхода должен быть одинаковым при каждой генерации
     val steps = HashMap<Cell, RiverStep>()
     var failed = 0
     for (upstream in riverCells) {
@@ -78,7 +80,7 @@ fun cutRivers(grid: MapGrid, order: List<Cell>, worldWidth: Float, worldHeight: 
     for (piece in pieces.values.filter { it.size > 1 }.flatten()) {
         if (piece.isRemoved || piece.area() >= minArea) continue
         for (target in mergeCandidates(piece)) {
-            val plan = MergeCells.Companion.plan(piece, target) ?: continue
+            val plan = MergeCells.plan(piece, target) ?: continue
             plan.apply(grid, index)
             merged++
             break
@@ -117,8 +119,6 @@ private fun cutCell(grid: MapGrid, cell: Cell, a: Vertex, b: Vertex, water: Floa
     other.water = cell.water
     other.flowsTo = cell.flowsTo
     other.isLake = cell.isLake
-    other.biome = cell.biome
-    other.depth = cell.depth
     other.updateLatitude(cell.latitude)
     grid.cells.add(other)
 

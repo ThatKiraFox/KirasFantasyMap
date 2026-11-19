@@ -36,6 +36,7 @@ tasks.test {
 
 tasks.withType<ComposeHotRun>().configureEach {
     mainClass.set("net.kira.fantasymap.MainKt")
+    jvmArgs("-Dskiko.vsync.enabled=false")
 }
 
 kotlin {

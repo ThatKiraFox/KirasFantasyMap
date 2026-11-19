@@ -24,7 +24,7 @@ class Camera(centerX: Float, centerY: Float, scale: Float) {
     }
 
     private companion object {
-        const val MIN_SCALE = 0.05f
+        const val MIN_SCALE = 0.01f
         const val MAX_SCALE = 200f
     }
 }
