@@ -174,7 +174,7 @@ fun renderTile(grid: MapGrid, cellIndex: CellIndex, key: TileKey, worldWidth: Fl
             path.close()
             val color = when {
                 cell.height <= 0 && LAYERS.BIOMES !in layers -> waterColor(cell.height) // море всегда
-                LAYERS.POPULATION in layers -> populationColor(cell, grid.maxPopulationDensity)
+                LAYERS.POPULATION in layers -> populationColor(cell, grid.maxPopulationDensity, grid.merkatorProjection)
                 LAYERS.BIOMES in layers -> biomesColor(cell.biome!!)                   // когда появятся биомы
                 LAYERS.MOISTURE in layers -> moistureColor(cell.moisture)
                 LAYERS.HEIGHT in layers -> heightColor(cell.height, maxHeight)
@@ -301,8 +301,8 @@ fun biomesColor(biome: Biomes): Color = when (biome) {
 fun moistureColor(moisture: Float): Color =
     lerp(Color.Red, Color.Green, ((moisture - 0.05f) / 0.95f).coerceIn(0f, 1f))
 
-fun populationColor(cell: Cell, maxDensity: Float): Color {
+fun populationColor(cell: Cell, maxDensity: Float, merkatorProjection: Boolean): Color {
     if (maxDensity <= 0f) return Color.Red
-    val density = cell.population / cell.area()
+    val density = cell.population / cell.statisticalArea(merkatorProjection)
     return lerp(Color.Red, Color.Green, (density / maxDensity).coerceIn(0f, 1f))
 }

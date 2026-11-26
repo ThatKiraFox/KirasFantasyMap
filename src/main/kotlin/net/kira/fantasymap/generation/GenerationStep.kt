@@ -16,7 +16,7 @@ import net.kira.fantasymap.render.curveEdges
 import kotlin.random.Random
 
 enum class GenerationStep(val id: Int, val run: (GenerationContext) -> Unit) {
-    CURVE_EDGES(1, { c -> curveEdges(c.grid, Random(c.params.seed + 1)) }),
+    CURVE_EDGES(1, { c -> curveEdges(c.grid, Random(c.params.seed + 1), c.params.curveIterations, c.params.curveDisplacement) }),
     HEIGHT(2, { c -> assignHeights(c.grid, c.params.worldWidth, c.params.worldHeight, c.params.seed + 2, c.params.maxHeight,
         c.params.fraction, c.params.baseFrequency, c.params.heightPower) }),
     LATITUDE(3, { c -> assignLatitude(c.grid, c.params.worldHeight, c.params.latitudeFrom, c.params.latitudeTo) }),
@@ -28,7 +28,7 @@ enum class GenerationStep(val id: Int, val run: (GenerationContext) -> Unit) {
     CREATE_LAKES(9, { c -> createLakes(c.grid) }),
     CREATE_RIVERS(10, { c -> createRivers(c.grid, c.order, c.riverSteps, c.params.riverThreshold) }),
     BIOMES(11, { c -> assignZonalBiome(c.grid, c.params.riverThreshold) }),
-    POPULATION(12, {c -> assignPopulation(c.grid, c.params.maxHeight, c.params.riverThreshold) });
+    POPULATION(12, {c -> assignPopulation(c.grid, c.params.maxHeight, c.params.riverThreshold, c.params.mercatorProjection) });
 
     companion object {
         fun byId(id: Int): GenerationStep = entries

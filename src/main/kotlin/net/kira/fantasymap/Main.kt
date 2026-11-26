@@ -16,6 +16,9 @@ import net.kira.fantasymap.render.chooseFile
 import net.kira.fantasymap.render.mapview.MapView
 import net.kira.fantasymap.repository.LoadedMap
 import net.kira.fantasymap.repository.loadMap
+import net.kira.fantasymap.util.SettingsStore
+import net.kira.fantasymap.util.readGenerationParams
+import net.kira.fantasymap.util.writeTo
 import java.io.File
 import kotlin.random.Random
 
@@ -31,7 +34,8 @@ fun main() = application {
     var error by remember { mutableStateOf<String?>(null) }
     var closeRequested by remember { mutableStateOf(false) }
     var generationParams by remember {
-        mutableStateOf(GenerationParams(40000f, 20000f, 300_000, seed = Random.nextLong(0, 1000000), maxHeight = 8500, fraction = 0.5f))
+        val default = GenerationParams(40000f, 20000f, 300_000, seed = 0, maxHeight = 8500, fraction = 0.5f)
+        mutableStateOf(readGenerationParams(SettingsStore.load(), Random.nextLong(0, 1000000), default))
     }
     val scope = rememberCoroutineScope()
 
@@ -73,7 +77,7 @@ fun main() = application {
             )
             is Screen.Settings -> SettingsScreen(
                 current = generationParams,
-                onApply = { generationParams = it; screen = Screen.Main },
+                onApply = { generationParams = it; SettingsStore.update { p -> it.writeTo(p) }; screen = Screen.Main },
                 onBack = { screen = Screen.Main }
             )
             is Screen.Loading -> LoadingScreen(current.text)

@@ -7,14 +7,14 @@ import net.kira.fantasymap.model.mapgrid.MapGrid
 import kotlin.math.sqrt
 import kotlin.random.Random
 
-private const val ITERATIONS = 4
-private const val DISPLACEMENT = 0.2f        // насколько середина может сместиться вбок, в долях длины отрезка
+const val DEFAULT_ITERATIONS = 4
+const val DEFAULT_DISPLACEMENT = 0.2f        // насколько середина может сместиться вбок, в долях длины отрезка
 private const val FIX_PASSES = 3             // сколько раз пробуем уменьшить смещение у испорченных клеток
 private val validators = ThreadLocal.withInitial { CellValidator() }
 
-fun curveEdges(grid: MapGrid, random: Random) {
+fun curveEdges(grid: MapGrid, random: Random, iterations: Int, displacement: Float) {
     for (edge in grid.edges) {
-        edge.points = curvedPoints(edge, DISPLACEMENT, random)
+        edge.points = curvedPoints(edge, displacement, random)
     }
 
     var broken: List<Cell> = grid.cells.parallelStream()
@@ -22,12 +22,12 @@ fun curveEdges(grid: MapGrid, random: Random) {
         .collect(java.util.stream.Collectors.toList())
     println("curved edges: broken cells after first pass: ${broken.size}")
 
-    var displacement = DISPLACEMENT
+    var displacement = displacement
     for (pass in 2..FIX_PASSES + 1) {
         if (broken.isEmpty()) break
         displacement /= 2f
         for (cell in broken) {
-            for (edge in cell.edges) edge.points = curvedPoints(edge, displacement, random)
+            for (edge in cell.edges) edge.points = curvedPoints(edge, displacement, random, iterations)
         }
         // Пересчёт мог испортить и соседей, поэтому проверяем испорченные клетки и их соседей.
         val affected = LinkedHashSet<Cell>()
@@ -48,9 +48,9 @@ fun curveEdges(grid: MapGrid, random: Random) {
     for (cell in grid.cells) cell.updateBounds()
 }
 // Промежуточные точки ломаной от начала ребра до конца, без самих концов.
-fun curvedPoints(edge: Edge, displacement: Float, random: Random): FloatArray {
+fun curvedPoints(edge: Edge, displacement: Float, random: Random, iterations: Int = DEFAULT_ITERATIONS): FloatArray {
     var points = floatArrayOf(edge.start.x, edge.start.y, edge.end.x, edge.end.y)
-    repeat(ITERATIONS) {
+    repeat(iterations) {
         val segmentCount = points.size / 2 - 1
         val next = FloatArray((2 * segmentCount + 1) * 2)
         for (i in 0 until segmentCount) {

@@ -13,9 +13,11 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.Button
+import androidx.compose.material.Checkbox
 import androidx.compose.material.CircularProgressIndicator
 import androidx.compose.material.OutlinedTextField
 import androidx.compose.material.Slider
+import androidx.compose.material.Switch
 import androidx.compose.material.Tab
 import androidx.compose.material.TabRow
 import androidx.compose.material.Text
@@ -37,6 +39,8 @@ import net.kira.fantasymap.render.mapview.PanelText
 import java.awt.Panel
 import kotlin.math.roundToInt
 import kotlin.random.Random
+
+private enum class SettingsSection(val title: String) { GENERATION("Генерация"), APP("Приложение") }
 
 @Composable
 fun MainScreen(error: String?, onNew: () -> Unit, onOpen: () -> Unit, onExit: () -> Unit, onSettings: () -> Unit) {
@@ -96,8 +100,12 @@ fun SettingsScreen(current: GenerationParams, onApply: (GenerationParams) -> Uni
     var riverThreshold by remember { mutableStateOf(current.riverThreshold.toString()) }
     var baseFrequency by remember { mutableStateOf(current.baseFrequency) }
     var heightPower by remember { mutableStateOf(current.heightPower) }
+    var merkatorProjection by remember { mutableStateOf(current.mercatorProjection) }
+    var section by remember { mutableStateOf(SettingsSection.GENERATION) }
+    var curveIterations by remember { mutableStateOf(current.curveIterations) }
+    var curveDisplacement by remember { mutableStateOf(current.curveDisplacement) }
 
-    val params = remember(width, height, maxHeight, latitudeFrom, latitudeTo, cellCount, seed, fraction) {
+    val params = run {
         val w = width.toFloatOrNull()
         val h = height.toFloatOrNull()
         val m = maxHeight.toIntOrNull()
@@ -112,12 +120,15 @@ fun SettingsScreen(current: GenerationParams, onApply: (GenerationParams) -> Uni
         val rt = riverThreshold.toFloatOrNull()
         val bf = baseFrequency
         val hp = heightPower
+        val mp = merkatorProjection
+        val ci = curveIterations
+        val cd = curveDisplacement
         if (w != null && h != null && m != null && lf != null && lt != null && s != null &&
             w > 0 && h > 0 && m > 0 && lf >= -90 && lt <= 90 && lf < lt && et != null && nt != null && st != null &&
             lr != null && hum != null && rt !=null)
             GenerationParams(w, h, cellCount, s, m, fraction,
                 lf, lt, et, nt, st, lr, hum,
-                lakeMinMoisture, rt, bf, hp)
+                lakeMinMoisture, rt, bf, hp, mp, ci, cd)
         else null
     }
 
@@ -125,97 +136,124 @@ fun SettingsScreen(current: GenerationParams, onApply: (GenerationParams) -> Uni
         Modifier.fillMaxSize().background(mapBackgroundColor),
         horizontalAlignment = Alignment.CenterHorizontally
     ) {
-        PanelText("Настройки генерации")
+        PanelText("Настройки")
         Spacer(Modifier.height(12.dp))
-
-        TabRow(
-            selectedTabIndex = tab,
-            backgroundColor = mapBackgroundColor,
-            contentColor = standardTextColor,
-            modifier = Modifier.width(400.dp)
-        ) {
-            Tab(selected = tab == 0, onClick = { tab = 0 }, text = { Text("Обычные") })
-            Tab(selected = tab == 1, onClick = { tab = 1 }, text = { Text("Расширенные") })
-        }
-        Spacer(Modifier.height(12.dp))
-        Column(Modifier.weight(1f).verticalScroll(rememberScrollState()),
-            horizontalAlignment = Alignment.CenterHorizontally) {
-            if (tab == 0) {
-                Row(horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
-                    ParamField("Сид", seed) { seed = it }
-                    Spacer(Modifier.width(4.dp))
-                    Button(onClick = { seed = Random.nextLong(0, 1_000_000).toString() }) { Text("Случайный сид") }
-                }
-                PanelText("Число клеток: ${cellCount / 1000}k")
-                Slider(
-                    value = cellCount / 1000f,
-                    onValueChange = { cellCount = it.roundToInt() * 1000 },
-                    valueRange = 10f..300f,
-                    modifier = Modifier.width(260.dp)
-                )
-                PanelText("Доля моря: ${(fraction * 100).roundToInt()}%")
-                Slider(value = fraction, onValueChange = { fraction = it }, modifier = Modifier.width(260.dp))
-            } else {
-                TabRow(
-                    selectedTabIndex = subTab,
-                    backgroundColor = mapBackgroundColor,
-                    contentColor = standardTextColor,
-                    modifier = Modifier.width(400.dp)
-                ) {
-                    Tab(selected = subTab == 0, onClick = { subTab = 0 }, text = { Text("Размеры") })
-                    Tab(selected = subTab == 1, onClick = { subTab = 1 }, text = { Text("Климат") })
-                    Tab(selected = subTab == 2, onClick = { subTab = 2 }, text = { Text("Рельеф") })
-                    Tab(selected = subTab == 3, onClick = { subTab = 3 }, text = { Text("Гидрология") })
-                }
-                Spacer(Modifier.height(8.dp))
-
-                if (subTab == 0) {
-                    ParamField("Размер X (ширина, км)", width) { width = it }
-                    ParamField("Размер Y (высота, км)", height) { height = it }
-                    ParamField("Размер Z (макс. высота)", maxHeight) { maxHeight = it }
-                }
-                if (subTab == 1) {
-                    Column(Modifier.width(260.dp)) {
-                        ParamField("Широта снизу (от -90)", latitudeFrom) { latitudeFrom = it }
-                        ParamField("Широта сверху (до 90)", latitudeTo) { latitudeTo = it }
-                        ParamField("Температура экватора", equatorTemperature) { equatorTemperature = it }
-                        ParamField("Температура северного полюса", northPoleTemperature) { northPoleTemperature = it }
-                        ParamField("Температура южного полюса", southPoleTemperature) { southPoleTemperature = it }
-                        ParamField("Изменение температуры с высотой", lapseRate) { lapseRate = it}
-                        ParamField("Коэффицент влажности", humidity) { humidity = it }
-                    }
-                }
-                if (subTab == 2) {
-                    PanelText("Частота генерации (чем выше, тем больше материков): ${(baseFrequency * 100).roundToInt()}%")
-                    Slider (
-                        value = baseFrequency,
-                        onValueChange = { baseFrequency = it },
-                        valueRange = 1f..10f,
-                        modifier = Modifier.width(260.dp)
-                    )
-                    PanelText("Сглаживание высоких гор (чем больше - тем меньше гор): ${(heightPower * 100).roundToInt()}%")
-                    Slider (
-                        value = heightPower,
-                        onValueChange = { heightPower = it },
-                        valueRange = 1f..10f,
-                        modifier = Modifier.width(260.dp)
-                    )
-                }
-                if (subTab == 3) {
-                    ParamField("Минимальная влажность для реки", riverThreshold) {riverThreshold = it}
-                    PanelText("Минимальная влажность для озера: ${(lakeMinMoisture * 100).roundToInt()}%")
-                    Slider (
-                        value = lakeMinMoisture,
-                        onValueChange = { lakeMinMoisture = it },
-                        valueRange = 0f..1f,
-                        modifier = Modifier.width(260.dp)
-                    )
-                }
+        Row {
+            for (s in SettingsSection.entries) {
+                Button(onClick = { section = s }) { Text((if (s == section) "✓ " else "") + s.title) }
+                Spacer(Modifier.width(4.dp))
             }
         }
+        Spacer(Modifier.height(12.dp))
+        if (section == SettingsSection.GENERATION) {
+            TabRow(
+                selectedTabIndex = tab,
+                backgroundColor = mapBackgroundColor,
+                contentColor = standardTextColor,
+                modifier = Modifier.width(400.dp)
+            ) {
+                Tab(selected = tab == 0, onClick = { tab = 0 }, text = { Text("Обычные") })
+                Tab(selected = tab == 1, onClick = { tab = 1 }, text = { Text("Расширенные") })
+            }
+            Spacer(Modifier.height(12.dp))
+            Column(Modifier.weight(1f).verticalScroll(rememberScrollState()),
+                horizontalAlignment = Alignment.CenterHorizontally) {
+                if (tab == 0) {
+                    Row(horizontalArrangement = Arrangement.Center, verticalAlignment = Alignment.CenterVertically) {
+                        ParamField("Сид", seed) { seed = it }
+                        Spacer(Modifier.width(4.dp))
+                        Button(onClick = { seed = Random.nextLong(0, 1_000_000).toString() }) { Text("Случайный сид") }
+                    }
+                    PanelText("Учитывать искажение площади")
+                    Switch(merkatorProjection, {merkatorProjection = it})
+                    PanelText("Число клеток: ${cellCount / 1000}k")
+                    Slider(
+                        value = cellCount / 1000f,
+                        onValueChange = { cellCount = it.roundToInt() * 1000 },
+                        valueRange = 10f..300f,
+                        modifier = Modifier.width(260.dp)
+                    )
+                    PanelText("Доля моря: ${(fraction * 100).roundToInt()}%")
+                    Slider(value = fraction, onValueChange = { fraction = it }, modifier = Modifier.width(260.dp))
+                } else {
+                    TabRow(
+                        selectedTabIndex = subTab,
+                        backgroundColor = mapBackgroundColor,
+                        contentColor = standardTextColor,
+                        modifier = Modifier.width(500.dp)
+                    ) {
+                        Tab(selected = subTab == 0, onClick = { subTab = 0 }, text = { Text("Размеры") })
+                        Tab(selected = subTab == 1, onClick = { subTab = 1 }, text = { Text("Климат") })
+                        Tab(selected = subTab == 2, onClick = { subTab = 2 }, text = { Text("Рельеф") })
+                        Tab(selected = subTab == 3, onClick = { subTab = 3 }, text = { Text("Гидрология") })
+                        Tab(selected = subTab == 4, onClick = { subTab = 4 }, text = { Text("Границы") })
+                    }
+                    Spacer(Modifier.height(8.dp))
 
-
-
+                    if (subTab == 0) {
+                        ParamField("Размер X (ширина, км)", width) { width = it }
+                        ParamField("Размер Y (высота, км)", height) { height = it }
+                        ParamField("Размер Z (макс. высота)", maxHeight) { maxHeight = it }
+                    }
+                    if (subTab == 1) {
+                        Column(Modifier.width(260.dp)) {
+                            ParamField("Широта снизу (от -90)", latitudeFrom) { latitudeFrom = it }
+                            ParamField("Широта сверху (до 90)", latitudeTo) { latitudeTo = it }
+                            ParamField("Температура экватора", equatorTemperature) { equatorTemperature = it }
+                            ParamField("Температура северного полюса", northPoleTemperature) { northPoleTemperature = it }
+                            ParamField("Температура южного полюса", southPoleTemperature) { southPoleTemperature = it }
+                            ParamField("Изменение температуры с высотой", lapseRate) { lapseRate = it}
+                            ParamField("Коэффицент влажности", humidity) { humidity = it }
+                        }
+                    }
+                    if (subTab == 2) {
+                        PanelText("Частота генерации (чем выше, тем больше материков): ${(baseFrequency * 100).roundToInt()}%")
+                        Slider (
+                            value = baseFrequency,
+                            onValueChange = { baseFrequency = it },
+                            valueRange = 1f..10f,
+                            modifier = Modifier.width(260.dp)
+                        )
+                        PanelText("Сглаживание высоких гор (чем больше - тем меньше гор): ${(heightPower * 100).roundToInt()}%")
+                        Slider (
+                            value = heightPower,
+                            onValueChange = { heightPower = it },
+                            valueRange = 1f..10f,
+                            modifier = Modifier.width(260.dp)
+                        )
+                    }
+                    if (subTab == 3) {
+                        ParamField("Минимальная влажность для реки", riverThreshold) {riverThreshold = it}
+                        PanelText("Минимальная влажность для озера: ${(lakeMinMoisture * 100).roundToInt()}%")
+                        Slider (
+                            value = lakeMinMoisture,
+                            onValueChange = { lakeMinMoisture = it },
+                            valueRange = 0f..1f,
+                            modifier = Modifier.width(260.dp)
+                        )
+                    }
+                    if (subTab == 4) {
+                        PanelText("Количество точек кривых: ${(1 shl curveIterations) - 1} на ребро")
+                        Slider(
+                            value = curveIterations.toFloat(),
+                            onValueChange = { curveIterations = it.roundToInt() },
+                            valueRange = 0f..5f,
+                            steps = 4,
+                            modifier = Modifier.width(260.dp)
+                        )
+                        PanelText("Кривизна прямых: ${(curveDisplacement * 100).roundToInt()}%")
+                        Slider(
+                            value = curveDisplacement,
+                            onValueChange = { curveDisplacement = it },
+                            valueRange = 0f..0.4f,
+                            modifier = Modifier.width(260.dp)
+                        )
+                    }
+                }
+            }
+        } else {
+            Column(Modifier.weight(1f)) { PanelText("Пока пусто") }
+        }
         Spacer(Modifier.height(12.dp))
         Row {
             Button(enabled = params != null, onClick = { params?.let(onApply) }) { Text("Применить") }

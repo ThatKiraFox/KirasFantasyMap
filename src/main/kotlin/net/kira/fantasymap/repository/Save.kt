@@ -45,6 +45,9 @@ class SaveFile(val params: GenerationParams, val steps: List<GenerationStep>, va
                 out.writeFloat(params.riverThreshold)
                 out.writeFloat(params.baseFrequency)
                 out.writeFloat(params.heightPower)
+                out.writeBoolean(params.mercatorProjection)
+                out.writeInt(params.curveIterations)
+                out.writeFloat(params.curveDisplacement)
                 out.writeInt(steps.size)
                 for (step in steps) out.writeInt(step.id)
 
@@ -72,7 +75,8 @@ class SaveFile(val params: GenerationParams, val steps: List<GenerationStep>, va
                         input.readFloat(), input.readFloat(),
                         input.readFloat(), input.readFloat(), input.readFloat(),
                         input.readFloat(), input.readFloat(), input.readFloat(), input.readFloat(),
-                        input.readFloat(), input.readFloat()
+                        input.readFloat(), input.readFloat(), input.readBoolean(),
+                        input.readInt(), input.readFloat(),
                     )
                     val steps = List(input.readInt()) { GenerationStep.byId(input.readInt()) }
                     val edits = List(input.readInt()) { Edit.read(input) }

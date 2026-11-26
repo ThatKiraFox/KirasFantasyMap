@@ -20,7 +20,7 @@ private const val FILL_MIN = 0.1f
 
 private val biomesWithWater = setOf(Biomes.GALLERY_FOREST, Biomes.FLOODPLAIN, Biomes.OASIS)
 
-fun assignPopulation(grid: MapGrid, maxHeight: Int, riverThreshold: Float) {
+fun assignPopulation(grid: MapGrid, maxHeight: Int, riverThreshold: Float, mercatorProjection: Boolean) {
     val nearWater = reach(grid, WATER_STEPS) { it.height <= 0 || it.isLake || it.water >= riverThreshold }
     var area = 0
 
@@ -69,11 +69,12 @@ fun assignPopulation(grid: MapGrid, maxHeight: Int, riverThreshold: Float) {
     println("population: cores ${cores.size}")
     for (cell in grid.cells) {
         if (cell.isRemoved) continue
-        cell.population = (density[cell.id] * cell.area()).toInt()
+        cell.population = (density[cell.id] * cell.statisticalArea(mercatorProjection)).toInt()
         total += cell.population
         if (density[cell.id] > maxDensity) maxDensity = density[cell.id]
     }
     grid.maxPopulationDensity = percentile95(grid, density)
+    grid.merkatorProjection = mercatorProjection
     println("population: total $total, max density $maxDensity")
 }
 

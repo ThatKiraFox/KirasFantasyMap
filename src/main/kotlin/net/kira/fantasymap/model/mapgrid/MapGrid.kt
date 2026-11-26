@@ -12,6 +12,7 @@ class MapGrid {
     val lakes = CopyOnWriteArrayList<Lake>()      // плитки рисуются в фоновых потоках, а правки идут из основного
     val rivers = CopyOnWriteArrayList<River>()
     var maxPopulationDensity = 0f
+    var merkatorProjection = false
 
     private val allVertices = ArrayList<Vertex>()          // все когда-либо созданные вершины, индекс = id (удалённые остаются)
     private val shapes = HashMap<Int, PointShape>()        // все когда-либо добавленные озёра и реки, включая удалённые

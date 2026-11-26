@@ -8,6 +8,8 @@ import net.kira.fantasymap.generation.loadingString
 import net.kira.fantasymap.model.mapgrid.Cell
 import net.kira.fantasymap.model.mapgrid.MapGrid
 import net.kira.fantasymap.model.mapgrid.Vertex
+import net.kira.fantasymap.render.DEFAULT_DISPLACEMENT
+import net.kira.fantasymap.render.DEFAULT_ITERATIONS
 import net.kira.fantasymap.util.timed
 import kotlin.math.ceil
 import kotlin.math.sqrt
@@ -32,7 +34,10 @@ class GenerationParams(
     val lakeMinMoisture: Float = 0.2f,
     val riverThreshold: Float = 50f,
     val baseFrequency: Float = 2f,
-    val heightPower: Float = 3f
+    val heightPower: Float = 3f,
+    val mercatorProjection: Boolean = true,
+    val curveIterations: Int = DEFAULT_ITERATIONS,
+    val curveDisplacement: Float = DEFAULT_DISPLACEMENT
 )
 
 class GenerationContext(val params: GenerationParams, val grid: MapGrid) {

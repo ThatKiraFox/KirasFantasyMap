@@ -1,7 +1,9 @@
 package net.kira.fantasymap.model.mapgrid
 
 import net.kira.fantasymap.model.Biomes
+import java.lang.Math.toRadians
 import kotlin.math.abs
+import kotlin.math.cos
 
 class Cell(val id: Int) {
 
@@ -131,6 +133,12 @@ class Cell(val id: Int) {
         if (hasPrevious) sum += previousX.toDouble() * firstY - firstX.toDouble() * previousY
         return (abs(sum) / 2.0).toFloat()
     }
+
+    fun statisticalArea(mercatorProjection: Boolean): Float =
+        if (mercatorProjection) {
+            area() * cos(toRadians(latitude.toDouble())).toFloat().coerceAtLeast(0.05f)
+        }
+        else area()
 
     fun getCenter(): Pair<Float, Float> {
         val centerX = (maxX + minX) / 2f
