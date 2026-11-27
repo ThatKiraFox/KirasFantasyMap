@@ -54,9 +54,9 @@ fun MapView(project: LoadedMap, appSettings: AppSettings, closeRequested: Boolea
     val averageCellArea = remember { worldWidth * worldHeight / grid.cells.size }
     val cellIndex = remember { CellIndex(grid.cells.filter { !it.isRemoved }, worldWidth, worldHeight, bucketSize = sqrt(averageCellArea) * 2f) }
     val tileCache = remember { TileCache(grid, cellIndex, scope, worldWidth, worldHeight, maxHeight, project.params.riverThreshold) }
-    val editor = remember { VertexEditor(grid, cellIndex, tileCache, averageCellArea, project.params.riverThreshold).also { it.restoreJournal(project.edits) } }
-    val shapeEditor = remember { ShapeEditor(grid, tileCache, editor) }
-    val biomeEditor = remember { BiomeEditor(cellIndex, tileCache, editor, sqrt(averageCellArea)) }
+    val editor = remember { VertexEditor(grid, cellIndex, tileCache, averageCellArea, project.params.riverThreshold, appSettings.curvesMinLevel).also { it.restoreJournal(project.edits) } }
+    val shapeEditor = remember { ShapeEditor(grid, tileCache, editor, appSettings.curvesMinLevel) }
+    val biomeEditor = remember { BiomeEditor(cellIndex, tileCache, editor, sqrt(averageCellArea), appSettings.curvesMinLevel) }
     val state = remember { MapState(
         grid = grid,
         camera = camera,

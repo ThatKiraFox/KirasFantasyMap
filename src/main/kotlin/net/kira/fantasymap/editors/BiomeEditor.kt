@@ -17,7 +17,8 @@ class BiomeEditor(
     private val cellIndex: CellIndex,
     private val tileCache: TileCache,
     private val history: VertexEditor,
-    private val cellSize: Float
+    private val cellSize: Float,
+    private val curvesMinLevel: Int
 ) {
     private val sinceFlush = Rect()      // что задето с прошлого обновления плиток
     private val wholeStroke = Rect()     // что задето за весь мазок
@@ -48,7 +49,7 @@ class BiomeEditor(
     // Мазок закончен: обновляем всё задетое на всех уровнях и пишем в историю.
     fun finish(stroke: Map<Cell, Biomes?>, biome: Biomes) {
         if (!wholeStroke.isEmpty) {
-            tileCache.invalidate(wholeStroke.minX, wholeStroke.minY, wholeStroke.maxX, wholeStroke.maxY)
+            tileCache.invalidate(wholeStroke.minX, wholeStroke.minY, wholeStroke.maxX, wholeStroke.maxY, curvesMinLevel = curvesMinLevel)
         }
         sinceFlush.clear()
         wholeStroke.clear()
@@ -57,7 +58,7 @@ class BiomeEditor(
 
     private fun flush(level: Int) {
         if (sinceFlush.isEmpty) return
-        tileCache.invalidate(sinceFlush.minX, sinceFlush.minY, sinceFlush.maxX, sinceFlush.maxY, onlyLevel = level)
+        tileCache.invalidate(sinceFlush.minX, sinceFlush.minY, sinceFlush.maxX, sinceFlush.maxY, onlyLevel = level, curvesMinLevel)
         sinceFlush.clear()
     }
 }

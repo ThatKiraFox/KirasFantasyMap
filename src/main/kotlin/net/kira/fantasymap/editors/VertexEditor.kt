@@ -159,7 +159,8 @@ class VertexEditor(
     private val cellIndex: CellIndex,
     private val tileCache: TileCache,
     averageCellArea: Float,
-    private val riverThreshold: Float
+    private val riverThreshold: Float,
+    private val curvesMinLevel: Int
 ) {
     private val validator = CellValidator()
     private val minCellArea = averageCellArea * MIN_CELL_AREA_FACTOR
@@ -369,7 +370,7 @@ class VertexEditor(
             }
         }
         val reach = river.margin + 3f * cellSize        // клетки вдоль линии шире самой линии
-        tileCache.invalidate(lowX - reach, lowY - reach, highX + reach, highY + reach)
+        tileCache.invalidate(lowX - reach, lowY - reach, highX + reach, highY + reach, curvesMinLevel = curvesMinLevel)
         journal.add(ApplyRiver(river.id))
         isDirty = true
         return failed
@@ -523,7 +524,7 @@ class VertexEditor(
             highY = maxOf(highY, cell.maxY)
         }
         if (lowX > highX) return
-        tileCache.invalidate(lowX, lowY, highX, highY)
+        tileCache.invalidate(lowX, lowY, highX, highY, curvesMinLevel = curvesMinLevel)
     }
 
     // Выполняет изменение озера или реки и просит перерисовать плитки там, где фигура была и где стала.
@@ -539,7 +540,8 @@ class VertexEditor(
         val margin = maxOf(oldMargin, shape.margin)
         tileCache.invalidate(
             minOf(oldMinX, shape.minX) - margin, minOf(oldMinY, shape.minY) - margin,
-            maxOf(oldMaxX, shape.maxX) + margin, maxOf(oldMaxY, shape.maxY) + margin
+            maxOf(oldMaxX, shape.maxX) + margin, maxOf(oldMaxY, shape.maxY) + margin,
+            curvesMinLevel = curvesMinLevel
         )
     }
 
@@ -548,7 +550,7 @@ class VertexEditor(
         for (river in updateRiverProfiles(grid.rivers, riverThreshold)) {
             if (river === except) continue
             val margin = river.margin
-            tileCache.invalidate(river.minX - margin, river.minY - margin, river.maxX + margin, river.maxY + margin)
+            tileCache.invalidate(river.minX - margin, river.minY - margin, river.maxX + margin, river.maxY + margin, curvesMinLevel = curvesMinLevel)
         }
     }
 
@@ -574,7 +576,7 @@ class VertexEditor(
     private fun applyMerge(plan: MergeCells) {
         plan.apply(grid, cellIndex)
         val target = plan.target
-        tileCache.invalidate(target.minX, target.minY, target.maxX, target.maxY)
+        tileCache.invalidate(target.minX, target.minY, target.maxX, target.maxY, curvesMinLevel = curvesMinLevel)
     }
 
     private fun revertMerge(plan: MergeCells) {
@@ -584,7 +586,7 @@ class VertexEditor(
         val mergedMaxX = target.maxX
         val mergedMaxY = target.maxY
         plan.revert(grid, cellIndex)
-        tileCache.invalidate(mergedMinX, mergedMinY, mergedMaxX, mergedMaxY)
+        tileCache.invalidate(mergedMinX, mergedMinY, mergedMaxX, mergedMaxY, curvesMinLevel = curvesMinLevel)
     }
 
     // Ищет следующую маленькую клетку. true: она есть и ждёт решения, false: всё решено.
@@ -632,7 +634,7 @@ class VertexEditor(
             cellIndex.reindex(cell)
             include(cell)                    // и после
         }
-        tileCache.invalidate(dirtyMinX, dirtyMinY, dirtyMaxX, dirtyMaxY)
+        tileCache.invalidate(dirtyMinX, dirtyMinY, dirtyMaxX, dirtyMaxY, curvesMinLevel = curvesMinLevel)
     }
 
     // Пересекает ли изменяемое ребро рёбра чужих клеток поблизости.

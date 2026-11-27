@@ -29,7 +29,7 @@ class ShapeDrag(val shape: PointShape, val pointIndex: Int, private val grabOffs
     fun restoreStart() = shape.movePoint(pointIndex, startX, startY)
 }
 
-class ShapeEditor(private val grid: MapGrid, private val tileCache: TileCache, private val history: VertexEditor) {
+class ShapeEditor(private val grid: MapGrid, private val tileCache: TileCache, private val history: VertexEditor, private val curvesMinLevel: Int) {
 
     // Если под курсором несколько озёр, берём самое маленькое.
     fun findLake(x: Float, y: Float): Lake? =
@@ -92,7 +92,8 @@ class ShapeEditor(private val grid: MapGrid, private val tileCache: TileCache, p
         val margin = shape.margin
         tileCache.invalidate(
             minOf(drag.oldMinX, shape.minX) - margin, minOf(drag.oldMinY, shape.minY) - margin,
-            maxOf(drag.oldMaxX, shape.maxX) + margin, maxOf(drag.oldMaxY, shape.maxY) + margin
+            maxOf(drag.oldMaxX, shape.maxX) + margin, maxOf(drag.oldMaxY, shape.maxY) + margin,
+            curvesMinLevel = curvesMinLevel
         )
     }
 }

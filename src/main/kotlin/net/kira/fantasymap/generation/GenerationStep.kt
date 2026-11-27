@@ -18,7 +18,7 @@ import kotlin.random.Random
 enum class GenerationStep(val id: Int, val run: (GenerationContext) -> Unit) {
     CURVE_EDGES(1, { c -> curveEdges(c.grid, Random(c.params.seed + 1), c.params.curveIterations, c.params.curveDisplacement) }),
     HEIGHT(2, { c -> assignHeights(c.grid, c.params.worldWidth, c.params.worldHeight, c.params.seed + 2, c.params.maxHeight,
-        c.params.fraction, c.params.baseFrequency, c.params.heightPower) }),
+        c.params.fraction, c.params.baseFrequency, c.params.heightPower, c.params.reliefPreset) }),
     LATITUDE(3, { c -> assignLatitude(c.grid, c.params.worldHeight, c.params.latitudeFrom, c.params.latitudeTo) }),
     TEMPERATURE(4, { c -> assignTemperature(c.grid, c.params.equatorTemperature, c.params.northPoleTemperature, c.params.southPoleTemperature, c.params.lapseRate) }),
     MOISTURE(5, { c -> assignMoisture(c.grid, c.params.worldWidth, c.params.worldHeight, c.params.seed + 3, c.params.humidity) }),

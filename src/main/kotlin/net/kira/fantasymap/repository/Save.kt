@@ -4,6 +4,7 @@ import net.kira.fantasymap.editors.Edit
 import net.kira.fantasymap.editors.writeEdit
 import net.kira.fantasymap.generation.GenerationStep
 import net.kira.fantasymap.generation.general.GenerationParams
+import net.kira.fantasymap.generation.general.ReliefPreset
 import net.kira.fantasymap.generation.general.generateMap
 import net.kira.fantasymap.model.mapgrid.CellIndex
 import net.kira.fantasymap.model.mapgrid.MapGrid
@@ -48,6 +49,7 @@ class SaveFile(val params: GenerationParams, val steps: List<GenerationStep>, va
                 out.writeBoolean(params.mercatorProjection)
                 out.writeInt(params.curveIterations)
                 out.writeFloat(params.curveDisplacement)
+                out.writeUTF(params.reliefPreset.name)
                 out.writeInt(steps.size)
                 for (step in steps) out.writeInt(step.id)
 
@@ -76,7 +78,7 @@ class SaveFile(val params: GenerationParams, val steps: List<GenerationStep>, va
                         input.readFloat(), input.readFloat(), input.readFloat(),
                         input.readFloat(), input.readFloat(), input.readFloat(), input.readFloat(),
                         input.readFloat(), input.readFloat(), input.readBoolean(),
-                        input.readInt(), input.readFloat(),
+                        input.readInt(), input.readFloat(), ReliefPreset.valueOf(input.readUTF())
                     )
                     val steps = List(input.readInt()) { GenerationStep.byId(input.readInt()) }
                     val edits = List(input.readInt()) { Edit.read(input) }

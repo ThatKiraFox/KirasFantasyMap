@@ -1,6 +1,7 @@
 package net.kira.fantasymap.util
 
 import net.kira.fantasymap.generation.general.GenerationParams
+import net.kira.fantasymap.generation.general.ReliefPreset
 import java.io.File
 import java.util.Properties
 
@@ -42,6 +43,7 @@ fun GenerationParams.writeTo(p: Properties) {
     p["heightPower"] = heightPower.toString()
     p["curveIterations"] = curveIterations.toString()
     p["curveDisplacement"] = curveDisplacement.toString()
+    p["reliefPreset"] = reliefPreset.name
 }
 
 fun AppSettings.writeTo(p: Properties) {
@@ -72,7 +74,8 @@ fun readGenerationParams(p: Properties, seed: Long, default: GenerationParams): 
         baseFrequency = f("baseFrequency", default.baseFrequency),
         heightPower = f("heightPower", default.heightPower),
         curveIterations = i("curveIterations", default.curveIterations),
-        curveDisplacement = f("curveDisplacement", default.curveDisplacement)
+        curveDisplacement = f("curveDisplacement", default.curveDisplacement),
+        reliefPreset = ReliefPreset.entries.firstOrNull { it.name == p.getProperty("reliefPreset") } ?: default.reliefPreset
     )
 }
 

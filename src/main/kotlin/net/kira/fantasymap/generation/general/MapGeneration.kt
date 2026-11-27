@@ -37,7 +37,8 @@ class GenerationParams(
     val heightPower: Float = 3f,
     val mercatorProjection: Boolean = true,
     val curveIterations: Int = DEFAULT_ITERATIONS,
-    val curveDisplacement: Float = DEFAULT_DISPLACEMENT
+    val curveDisplacement: Float = DEFAULT_DISPLACEMENT,
+    val reliefPreset: ReliefPreset = ReliefPreset.CONTINENT
 )
 
 class GenerationContext(val params: GenerationParams, val grid: MapGrid) {

@@ -34,6 +34,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import net.kira.fantasymap.generation.general.GenerationParams
+import net.kira.fantasymap.generation.general.ReliefPreset
 import net.kira.fantasymap.render.mapview.ErrorText
 import net.kira.fantasymap.render.mapview.PanelText
 import net.kira.fantasymap.util.AppSettings
@@ -109,6 +110,7 @@ fun SettingsScreen(current: GenerationParams, appSettings: AppSettings, onApply:
     var curveDisplacement by remember { mutableStateOf(current.curveDisplacement) }
     var autosaveMinutes by remember { mutableStateOf(appSettings.autosaveMinutes) }
     var curvesMinLevel by remember { mutableStateOf(appSettings.curvesMinLevel) }
+    var reliefPreset by remember { mutableStateOf(current.reliefPreset) }
 
     val params = run {
         val w = width.toFloatOrNull()
@@ -128,12 +130,13 @@ fun SettingsScreen(current: GenerationParams, appSettings: AppSettings, onApply:
         val mp = merkatorProjection
         val ci = curveIterations
         val cd = curveDisplacement
+        val rp = reliefPreset
         if (w != null && h != null && m != null && lf != null && lt != null && s != null &&
             w > 0 && h > 0 && m > 0 && lf >= -90 && lt <= 90 && lf < lt && et != null && nt != null && st != null &&
             lr != null && hum != null && rt !=null)
             GenerationParams(w, h, cellCount, s, m, fraction,
                 lf, lt, et, nt, st, lr, hum,
-                lakeMinMoisture, rt, bf, hp, mp, ci, cd)
+                lakeMinMoisture, rt, bf, hp, mp, ci, cd, rp)
         else null
     }
 
@@ -171,6 +174,18 @@ fun SettingsScreen(current: GenerationParams, appSettings: AppSettings, onApply:
                     }
                     PanelText("Учитывать искажение площади")
                     Switch(merkatorProjection, {merkatorProjection = it})
+                    PanelText("Пресет рельефа")
+                    for (row in ReliefPreset.entries.chunked(2)) {
+                        Row {
+                            for (p in row) {
+                                Button(onClick = {
+                                    reliefPreset = p
+                                    fraction = p.fraction; baseFrequency = p.baseFrequency; heightPower = p.heightPower
+                                }) { Text((if (p == reliefPreset) "✓ " else "") + p.title) }
+                                Spacer(Modifier.width(4.dp))
+                            }
+                        }
+                    }
                     PanelText("Число клеток: ${cellCount / 1000}k")
                     Slider(
                         value = cellCount / 1000f,
