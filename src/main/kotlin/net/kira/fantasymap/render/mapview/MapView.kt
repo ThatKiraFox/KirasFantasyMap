@@ -28,15 +28,17 @@ import net.kira.fantasymap.editors.ShapeEditor
 import net.kira.fantasymap.editors.VertexEditor
 import net.kira.fantasymap.model.mapgrid.CellIndex
 import net.kira.fantasymap.render.TileCache
+import net.kira.fantasymap.render.curveEdges
 import net.kira.fantasymap.render.mapBackgroundColor
 import net.kira.fantasymap.repository.LoadedMap
+import net.kira.fantasymap.util.AppSettings
 import java.io.File
 import kotlin.math.pow
 import kotlin.math.sqrt
 
 @OptIn(ExperimentalComposeUiApi::class)
 @Composable
-fun MapView(project: LoadedMap, closeRequested: Boolean, onCancelClose: () -> Unit, onExit: () -> Unit, onOpen: (File) -> Unit, onMenu: () -> Unit) {
+fun MapView(project: LoadedMap, appSettings: AppSettings, closeRequested: Boolean, onCancelClose: () -> Unit, onExit: () -> Unit, onOpen: (File) -> Unit, onMenu: () -> Unit) {
     val grid = project.grid
     val params = project.params
     val steps = project.steps
@@ -58,6 +60,7 @@ fun MapView(project: LoadedMap, closeRequested: Boolean, onCancelClose: () -> Un
     val state = remember { MapState(
         grid = grid,
         camera = camera,
+        curvesMinLevel = appSettings.curvesMinLevel,
         cellIndex = cellIndex,
         tileCache = tileCache,
         editor = editor,
@@ -106,12 +109,21 @@ fun MapView(project: LoadedMap, closeRequested: Boolean, onCancelClose: () -> Un
     LaunchedEffect(Unit) {
         // ждём, пока нарисуются плитки, видимые на старте, и только потом заказываем нижние уровни
         while (stats.drawnTiles == 0 || stats.waitingTiles > 0) delay(100)
-        tileCache.prerenderLowLevels()
+        tileCache.prerenderLowLevels(appSettings.curvesMinLevel)
     }
 
     LaunchedEffect(closeRequested) {
         if (!closeRequested) return@LaunchedEffect
         if (editor.isDirty) state.closePrompt = true else onExit()
+    }
+
+    LaunchedEffect(Unit) {
+        val minutes = appSettings.autosaveMinutes
+        if (minutes <= 0) return@LaunchedEffect
+        while (true) {
+            delay(minutes * 60_000L)
+            if (state.file != null && editor.isDirty) state.save()
+        }
     }
 
     Box(
@@ -154,7 +166,7 @@ fun MapView(project: LoadedMap, closeRequested: Boolean, onCancelClose: () -> Un
         ) {
             frameTick                                            // подписка на перерисовку каждый кадр
             val t0 = System.nanoTime()
-            drawTiles(camera, tileCache, worldWidth, worldHeight, stats)
+            drawTiles(camera, tileCache, worldWidth, worldHeight, stats, appSettings.curvesMinLevel)
             drawEditOverlay(state)
             stats.drawNanos = System.nanoTime() - t0
         }

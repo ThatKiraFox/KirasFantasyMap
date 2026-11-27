@@ -27,6 +27,7 @@ import kotlin.math.pow
 import kotlin.math.roundToInt
 import androidx.compose.ui.graphics.asSkiaBitmap
 import net.kira.fantasymap.generation.general.POPULATION_COUNT
+import net.kira.fantasymap.util.AppSettings
 import org.jetbrains.skia.Image as SkiaImage
 
 const val TILE_SIZE = 512
@@ -70,43 +71,43 @@ class TileCache(
 
     fun <T> editingGrid(action: () -> T): T = gridLock.write(action)
 
-    fun setLayers(value: Set<LAYERS>, level: Int, minX: Float, minY: Float, maxX: Float, maxY: Float) {
+    fun setLayers(value: Set<LAYERS>, level: Int, minX: Float, minY: Float, maxX: Float, maxY: Float, curvesMinLevel: Int) {
         layers = value
         for (key in tiles.keys.toList() + pinnedTiles.keys) {
-            if (key.level == level && touches(key, minX, minY, maxX, maxY)) request(key, force = true)
+            if (key.level == level && touches(key, minX, minY, maxX, maxY)) request(key, force = true, curvesMinLevel)
             else { tiles.remove(key); pinnedTiles.remove(key) }
         }
         for (key in pending.toList()) outdated.add(key)
     }
 
-    fun prerenderLowLevels() {
+    fun prerenderLowLevels(curvesMinLevel: Int) {
         for (level in 0..PINNED_LEVELS) {
             val tileWorldSize = TILE_SIZE / pixelsPerUnit(level)
             for (column in 0..floor(worldWidth / tileWorldSize).toInt()) {
                 for (row in 0..floor(worldHeight / tileWorldSize).toInt()) {
-                    request(TileKey(level, column, row), force = false)
+                    request(TileKey(level, column, row), force = false, curvesMinLevel)
                 }
             }
         }
     }
 
     // Только смотрит в кэш, ничего не запрашивает.
-    fun peek(key: TileKey): SkiaImage? =
+    fun peek(key: TileKey, curvesMinLevel: Int): SkiaImage? =
         if (key.level <= PINNED_LEVELS) pinnedTiles[key] else tiles[key]
 
     // Готовую плитку возвращает сразу, иначе ставит её рисоваться в фоне и возвращает null.
-    fun get(key: TileKey): SkiaImage? {
-        val ready = peek(key)
-        if (ready == null) request(key, force = false)
+    fun get(key: TileKey, curvesMinLevel: Int): SkiaImage? {
+        val ready = peek(key, curvesMinLevel)
+        if (ready == null) request(key, force = false, curvesMinLevel)
         return ready
     }
 
     // onlyLevel: перерисовать только плитки этого уровня (для быстрых правок вроде кисти).
-    fun invalidate(minX: Float, minY: Float, maxX: Float, maxY: Float, onlyLevel: Int? = null) {
+    fun invalidate(minX: Float, minY: Float, maxX: Float, maxY: Float, onlyLevel: Int? = null, curvesMinLevel: Int) {
         val cachedKeys = tiles.keys.toList() + pinnedTiles.keys
         for (key in cachedKeys) {
             if (onlyLevel != null && key.level != onlyLevel) continue
-            if (touches(key, minX, minY, maxX, maxY)) request(key, force = true)
+            if (touches(key, minX, minY, maxX, maxY)) request(key, force = true, curvesMinLevel)
         }
         for (key in pending.toList()) {
             if (onlyLevel != null && key.level != onlyLevel) continue
@@ -114,7 +115,7 @@ class TileCache(
         }
     }
 
-    private fun request(key: TileKey, force: Boolean) {
+    private fun request(key: TileKey, force: Boolean, curvesMinLevel: Int) {
         if (!pending.add(key)) {
             if (force) outdated.add(key)
             return
@@ -122,14 +123,14 @@ class TileCache(
         scope.launch {
             val currentLayers = layers
             val image = withContext(Dispatchers.Default) {
-                val bitmap = gridLock.read { renderTile(grid, cellIndex, key, worldWidth, worldHeight, maxHeight, currentLayers, riverThreshold) }
+                val bitmap = gridLock.read { renderTile(grid, cellIndex, key, worldWidth, worldHeight, maxHeight, currentLayers, riverThreshold, curvesMinLevel) }
                 val skia = bitmap.asSkiaBitmap()
                 skia.setImmutable()
                 SkiaImage.makeFromBitmap(skia)
             }
             if (key.level <= PINNED_LEVELS) pinnedTiles[key] = image else tiles[key] = image
             pending.remove(key)
-            if (outdated.remove(key)) request(key, force = false)
+            if (outdated.remove(key)) request(key, force = false, curvesMinLevel)
         }
     }
 
@@ -141,14 +142,15 @@ class TileCache(
     }
 }
 
-fun renderTile(grid: MapGrid, cellIndex: CellIndex, key: TileKey, worldWidth: Float, worldHeight: Float, maxHeight: Int, layers: Set<LAYERS>, riverThreshold: Float): ImageBitmap {
+fun renderTile(grid: MapGrid, cellIndex: CellIndex, key: TileKey, worldWidth: Float, worldHeight: Float,
+               maxHeight: Int, layers: Set<LAYERS>, riverThreshold: Float, curvesMinLevel: Int): ImageBitmap {
     val pixelsPerWorldUnit = pixelsPerUnit(key.level)
     val tileWorldSize = TILE_SIZE / pixelsPerWorldUnit
     val minX = key.column * tileWorldSize
     val minY = key.row * tileWorldSize
     val maxX = minX + tileWorldSize
     val maxY = minY + tileWorldSize
-    val showCurves = pixelsPerWorldUnit >= CURVES_MIN_PIXELS_PER_UNIT
+    val showCurves = key.level >= curvesMinLevel
 
     val candidates: Collection<Cell> =
         if (tileWorldSize * tileWorldSize > worldWidth * worldHeight * BIG_TILE_SHARE_OF_WORLD) grid.cells

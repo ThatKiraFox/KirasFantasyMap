@@ -16,7 +16,9 @@ import net.kira.fantasymap.render.chooseFile
 import net.kira.fantasymap.render.mapview.MapView
 import net.kira.fantasymap.repository.LoadedMap
 import net.kira.fantasymap.repository.loadMap
+import net.kira.fantasymap.util.AppSettings
 import net.kira.fantasymap.util.SettingsStore
+import net.kira.fantasymap.util.readAppSettings
 import net.kira.fantasymap.util.readGenerationParams
 import net.kira.fantasymap.util.writeTo
 import java.io.File
@@ -37,6 +39,8 @@ fun main() = application {
         val default = GenerationParams(40000f, 20000f, 300_000, seed = 0, maxHeight = 8500, fraction = 0.5f)
         mutableStateOf(readGenerationParams(SettingsStore.load(), Random.nextLong(0, 1000000), default))
     }
+    val appSettings by remember {
+        mutableStateOf(readAppSettings(SettingsStore.load(), AppSettings())) }
     val scope = rememberCoroutineScope()
 
     // Выполняет задачу в фоне и показывает, какой шаг идёт.
@@ -77,6 +81,7 @@ fun main() = application {
             )
             is Screen.Settings -> SettingsScreen(
                 current = generationParams,
+                appSettings = appSettings,
                 onApply = { generationParams = it; SettingsStore.update { p -> it.writeTo(p) }; screen = Screen.Main },
                 onBack = { screen = Screen.Main }
             )
@@ -85,6 +90,7 @@ fun main() = application {
                 MapView(
                     current.project,
                     closeRequested = closeRequested,
+                    appSettings = appSettings,
                     onCancelClose = { closeRequested = false },
                     onExit = ::exitApplication,
                     onOpen = { openFile(it) },

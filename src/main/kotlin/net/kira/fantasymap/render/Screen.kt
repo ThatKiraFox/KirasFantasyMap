@@ -36,6 +36,9 @@ import androidx.compose.ui.unit.sp
 import net.kira.fantasymap.generation.general.GenerationParams
 import net.kira.fantasymap.render.mapview.ErrorText
 import net.kira.fantasymap.render.mapview.PanelText
+import net.kira.fantasymap.util.AppSettings
+import net.kira.fantasymap.util.SettingsStore
+import net.kira.fantasymap.util.writeTo
 import java.awt.Panel
 import kotlin.math.roundToInt
 import kotlin.random.Random
@@ -79,7 +82,7 @@ fun LoadingScreen(text: String) {
 }
 
 @Composable
-fun SettingsScreen(current: GenerationParams, onApply: (GenerationParams) -> Unit, onBack: () -> Unit) {
+fun SettingsScreen(current: GenerationParams, appSettings: AppSettings, onApply: (GenerationParams) -> Unit, onBack: () -> Unit) {
     var tab by remember { mutableStateOf(0) }
 
     var width by remember { mutableStateOf(current.worldWidth.toString()) }
@@ -104,6 +107,8 @@ fun SettingsScreen(current: GenerationParams, onApply: (GenerationParams) -> Uni
     var section by remember { mutableStateOf(SettingsSection.GENERATION) }
     var curveIterations by remember { mutableStateOf(current.curveIterations) }
     var curveDisplacement by remember { mutableStateOf(current.curveDisplacement) }
+    var autosaveMinutes by remember { mutableStateOf(appSettings.autosaveMinutes) }
+    var curvesMinLevel by remember { mutableStateOf(appSettings.curvesMinLevel) }
 
     val params = run {
         val w = width.toFloatOrNull()
@@ -252,11 +257,31 @@ fun SettingsScreen(current: GenerationParams, onApply: (GenerationParams) -> Uni
                 }
             }
         } else {
-            Column(Modifier.weight(1f)) { PanelText("Пока пусто") }
+            Column(Modifier.weight(1f), horizontalAlignment = Alignment.CenterHorizontally) {
+                PanelText(if (autosaveMinutes == 0) "Автосохранение: выключено" else "Автосохранение: раз в $autosaveMinutes мин")
+                Slider(
+                    value = autosaveMinutes.toFloat(),
+                    onValueChange = { autosaveMinutes = it.roundToInt() },
+                    valueRange = 0f..30f,
+                    steps = 29,
+                    modifier = Modifier.width(260.dp)
+                )
+                PanelText("Минимальное приближение для отображения точек кривых: уровень $curvesMinLevel")
+                Slider(
+                    value = curvesMinLevel.toFloat(),
+                    onValueChange = { curvesMinLevel = it.roundToInt() },
+                    valueRange = 0f..MAX_LEVEL.toFloat(),
+                    steps = MAX_LEVEL - 1,
+                    modifier = Modifier.width(260.dp)
+                )
+            }
         }
         Spacer(Modifier.height(12.dp))
         Row {
-            Button(enabled = params != null, onClick = { params?.let(onApply) }) { Text("Применить") }
+            Button(enabled = params != null, onClick = {
+                SettingsStore.update { appSettings.writeTo(SettingsStore.load()) }
+                params?.let(onApply)
+            }) { Text("Применить") }
             Spacer(Modifier.width(8.dp))
             Button(onClick = onBack) { Text("Назад") }
         }

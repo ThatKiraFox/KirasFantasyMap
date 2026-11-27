@@ -44,6 +44,11 @@ fun GenerationParams.writeTo(p: Properties) {
     p["curveDisplacement"] = curveDisplacement.toString()
 }
 
+fun AppSettings.writeTo(p: Properties) {
+    p["autosaveMinutes"] = autosaveMinutes.toString()
+    p["curvesMinLevel"] = curvesMinLevel.toString()
+}
+
 // Чего нет в файле или не читается, берётся из default.
 fun readGenerationParams(p: Properties, seed: Long, default: GenerationParams): GenerationParams {
     fun f(key: String, d: Float) = p.getProperty(key)?.toFloatOrNull() ?: d
@@ -68,5 +73,13 @@ fun readGenerationParams(p: Properties, seed: Long, default: GenerationParams): 
         heightPower = f("heightPower", default.heightPower),
         curveIterations = i("curveIterations", default.curveIterations),
         curveDisplacement = f("curveDisplacement", default.curveDisplacement)
+    )
+}
+
+fun readAppSettings(p: Properties, default: AppSettings): AppSettings {
+    fun i(key: String, d: Int) = p.getProperty(key)?.toIntOrNull() ?: d
+    return AppSettings(
+        autosaveMinutes = i("autosaveMinutes", default.autosaveMinutes),
+        curvesMinLevel = i("curvesMinLevel", default.curvesMinLevel),
     )
 }

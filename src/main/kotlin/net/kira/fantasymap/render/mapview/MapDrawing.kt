@@ -48,7 +48,7 @@ class RenderStats {
     var drawNanos = 0L
 }
 
-fun DrawScope.drawTiles(camera: Camera, tileCache: TileCache, worldWidth: Float, worldHeight: Float, stats: RenderStats) {
+fun DrawScope.drawTiles(camera: Camera, tileCache: TileCache, worldWidth: Float, worldHeight: Float, stats: RenderStats, curvesMinLevel: Int) {
     val level = levelForScale(camera.scale)
     val tileWorldSize = TILE_SIZE / pixelsPerUnit(level)
 
@@ -78,7 +78,7 @@ fun DrawScope.drawTiles(camera: Camera, tileCache: TileCache, worldWidth: Float,
                 val bottom = camera.worldToScreenY(row * tileWorldSize, size.height).roundToInt()
 
                 val key = TileKey(level, column, row)
-                val image = tileCache.get(key)
+                val image = tileCache.get(key, curvesMinLevel)
                 if (image != null) {
                     native.drawImageRect(
                         image, source,
@@ -87,7 +87,7 @@ fun DrawScope.drawTiles(camera: Camera, tileCache: TileCache, worldWidth: Float,
                     )
                     drawn++
                 } else {
-                    drawFallbackTile(native, tileCache, key, IntOffset(left, top), IntSize(right - left, bottom - top))
+                    drawFallbackTile(native, tileCache, key, curvesMinLevel = curvesMinLevel,IntOffset(left, top), IntSize(right - left, bottom - top))
                     waiting++
                 }
             }
@@ -102,13 +102,14 @@ private fun drawFallbackTile(
     native: Canvas,
     cache: TileCache,
     key: TileKey,
+    curvesMinLevel: Int,
     destinationOffset: IntOffset,
     destinationSize: IntSize
 ) {
     for (steps in 1..MAX_FALLBACK_STEPS) {
         if (key.level - steps < 0) return
         val parentKey = TileKey(key.level - steps, key.column shr steps, key.row shr steps)
-        val parentImage = cache.peek(parentKey) ?: continue
+        val parentImage = cache.peek(parentKey, curvesMinLevel) ?: continue
         val partSize = TILE_SIZE shr steps                       // сторона нужного куска в пикселях родителя
         val mask = (1 shl steps) - 1
         val sourceX = (key.column and mask) * partSize

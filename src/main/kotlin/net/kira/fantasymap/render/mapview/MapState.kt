@@ -23,10 +23,12 @@ import net.kira.fantasymap.render.TileCache
 import net.kira.fantasymap.render.chooseFile
 import net.kira.fantasymap.render.levelForScale
 import net.kira.fantasymap.repository.SaveFile
+import net.kira.fantasymap.util.AppSettings
 import java.io.File
 
 class MapState(val grid: MapGrid,
                val camera: Camera,
+               val curvesMinLevel: Int,
                val cellIndex: CellIndex,
                val tileCache: TileCache,
                val editor: VertexEditor,
@@ -91,7 +93,7 @@ class MapState(val grid: MapGrid,
         tileCache.setLayers(
             layers, levelForScale(camera.scale),
             camera.centerX - halfWidth, camera.centerY - halfHeight,
-            camera.centerX + halfWidth, camera.centerY + halfHeight
+            camera.centerX + halfWidth, camera.centerY + halfHeight, curvesMinLevel
         )
         requestFocus()
     }
